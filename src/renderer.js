@@ -135,7 +135,6 @@ let recoveryTimer = null;
 let saveQueue = Promise.resolve();
 let modalResolve = null;
 let gridDrag = null;
-let scrollLock = false;
 let suppressChange = false;
 
 function clamp(value, min, max) {
@@ -1014,6 +1013,12 @@ function previewHeadingElements() {
   return el.preview.querySelectorAll('h1, h2, h3, h4, h5, h6');
 }
 
+function setPaneScrollTop(value) {
+  const max = Math.max(0, el.previewPane.scrollHeight - el.previewPane.clientHeight);
+  const target = Math.min(max, Math.max(0, value));
+  if (Math.abs(el.previewPane.scrollTop - target) > 1) el.previewPane.scrollTop = target;
+}
+
 function syncEditorToPreview(info) {
   const headings = previewHeadingElements();
   const visibleLine = cm.lineAtHeight(info.top + 4, 'local');
@@ -1021,16 +1026,17 @@ function syncEditorToPreview(info) {
   if (index >= 0 && headings[index]) {
     const target = headings[index];
     const top = target.getBoundingClientRect().top - el.previewPane.getBoundingClientRect().top + el.previewPane.scrollTop - 8;
-    el.previewPane.scrollTop = Math.max(0, top);
+    setPaneScrollTop(top);
     return;
   }
   const sourceMax = info.height - info.clientHeight;
   const targetMax = el.previewPane.scrollHeight - el.previewPane.clientHeight;
-  if (sourceMax > 0 && targetMax > 0) el.previewPane.scrollTop = (info.top / sourceMax) * targetMax;
+  if (sourceMax > 0 && targetMax > 0) setPaneScrollTop((info.top / sourceMax) * targetMax);
 }
 
 function syncPreviewToEditor() {
   const headings = previewHeadingElements();
+  const info = cm.getScrollInfo();
   if (headings.length > 0 && state.outline.length > 0) {
     const paneTop = el.previewPane.getBoundingClientRect().top;
     let index = 0;
@@ -1041,14 +1047,18 @@ function syncPreviewToEditor() {
     const heading = state.outline[index];
     if (heading) {
       const line = Math.max(0, heading.line - 1);
-      cm.scrollTo(null, Math.max(0, cm.heightAtLine(line, 'local') - 8));
+      const max = Math.max(0, info.height - info.clientHeight);
+      const target = Math.min(max, Math.max(0, cm.heightAtLine(line, 'local') - 8));
+      if (Math.abs(info.top - target) > 2) cm.scrollTo(null, target);
       return;
     }
   }
   const sourceMax = el.previewPane.scrollHeight - el.previewPane.clientHeight;
-  const info = cm.getScrollInfo();
   const targetMax = info.height - info.clientHeight;
-  if (sourceMax > 0 && targetMax > 0) cm.scrollTo(info.left, (el.previewPane.scrollTop / sourceMax) * targetMax);
+  if (sourceMax > 0 && targetMax > 0) {
+    const target = Math.min(targetMax, Math.max(0, (el.previewPane.scrollTop / sourceMax) * targetMax));
+    if (Math.abs(info.top - target) > 2) cm.scrollTo(info.left, target);
+  }
 }
 
 function onEditorScroll() {
@@ -1056,10 +1066,8 @@ function onEditorScroll() {
   if (!tab || !cm) return;
   const info = cm.getScrollInfo();
   tab.scroll = { left: info.left, top: info.top };
-  if (!state.settings.preview || scrollLock) return;
-  scrollLock = true;
+  if (!state.settings.preview) return;
   syncEditorToPreview(info);
-  requestAnimationFrame(() => { scrollLock = false; });
 }
 
 function insertText(value) {
@@ -2374,10 +2382,8 @@ function bindEvents() {
   el.btnFind.addEventListener('click', openFind);
 
   el.previewPane.addEventListener('scroll', () => {
-    if (!state.settings.preview || scrollLock || !cm) return;
-    scrollLock = true;
+    if (!state.settings.preview || !cm) return;
     syncPreviewToEditor();
-    requestAnimationFrame(() => { scrollLock = false; });
   });
 
   el.preview.addEventListener('click', async (event) => {
@@ -2679,6 +2685,15 @@ async function init() {
         getCursor: () => (cm ? cm.getCursor() : null),
         openRel,
         refreshWorkspace,
+        scrollEditorTo: (top) => {
+          if (!cm) return;
+          cm.scrollTo(null, top);
+          syncEditorToPreview(cm.getScrollInfo());
+        },
+        scrollPreviewTo: (top) => {
+          el.previewPane.scrollTop = top;
+          syncPreviewToEditor();
+        },
         renderPreview,
         renderOutline,
         runFind,

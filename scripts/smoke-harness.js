@@ -125,9 +125,9 @@ async function run(context) {
       const longDoc = ['# A', '', ...Array(40).fill('段落内容。\n'), '## B', '', ...Array(40).fill('段落内容。\n'), '## C', '', ...Array(40).fill('段落内容。\n')].join('\n');
       await setText(longDoc);
       await waitFor('document.querySelectorAll("#preview h2").length >= 2', '长文档预览');
-      await js('document.querySelector(".CodeMirror").CodeMirror.scrollTo(null, 100000)');
+      await js('window.__mdTest.scrollEditorTo(100000)');
       await waitFor('document.getElementById("previewPane").scrollTop > 100', '预览同步滚动');
-      await js('(() => { const pane = document.getElementById("previewPane"); pane.scrollTop = pane.scrollHeight; return true; })()');
+      await js('window.__mdTest.scrollPreviewTo(document.getElementById("previewPane").scrollHeight)');
       await waitFor('document.querySelector(".CodeMirror").CodeMirror.getScrollInfo().top > 100', '预览反向同步滚动');
       await setText(original);
       await waitFor('window.__mdTest.getText().includes("# 标题")', '恢复原始文档');
