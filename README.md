@@ -40,6 +40,7 @@
 - 便携模式：`MarkdownNotes.exe --portable`，或 exe 同目录存在 `data/` 时，设置/日志/快照/恢复文件全部写入该目录，不写 `%APPDATA%`。
 - 日志：帮助菜单可打开日志目录、复制路径、清空；主进程与渲染错误统一记录到 `logs/main.log`。
 - 渲染层启用 `contextIsolation`、`sandbox`、严格 CSP，禁用 Node 集成与远程页面导航。
+- 自定义图标：打包时由 `scripts/make-icon.js` 程序化生成多尺寸（16–256）`icon.ico` 并嵌入 exe，窗口/任务栏显示蓝底白色 M；源码不提交二进制图标。
 
 ## 运行环境
 
@@ -66,6 +67,7 @@ src/
   vendor/              marked、CodeMirror、highlight.js（由 scripts/vendor.js 复制）
 scripts/
   vendor.js            复制并记录依赖版本
+  make-icon.js         程序化生成多尺寸 icon.ico（16–256）
   test-text.js         纯函数单测
   smoke-harness.js     Electron 端到端冒烟测试
   package.js           IA-32 免安装打包、PE 校验、启动与便携自检
@@ -76,8 +78,9 @@ scripts/
 ```bash
 npm ci                 # 安装锁定版本依赖（npm 12 需允许 electron 的 postinstall，见 package.json 的 allowScripts）
 npm test               # 纯函数单测：查找/替换、列表续行、大纲、表格、字数
+npm run icon           # 生成 build/icon.ico（npm ci / npm start / 打包会自动执行）
 npm start              # 开发模式启动
-npm run smoke          # Electron 端到端冒烟，19 项断言
+npm run smoke          # Electron 端到端冒烟，20 项断言
 npm run pack:win32     # 生成 dist/MarkdownNotes-<版本>-win32-ia32.zip
 ```
 
@@ -90,6 +93,15 @@ npm run pack:win32     # 生成 dist/MarkdownNotes-<版本>-win32-ia32.zip
 | codemirror | 5.65.16 | 编辑器：行号、查找、撤销、语法模式 |
 | @highlightjs/cdn-assets | 11.9.0 | 预览代码块离线语法高亮（浏览器构建） |
 | @electron/packager | 18.4.4 | 免安装目录、ASAR、ZIP 与 PE 架构校验 |
+
+## 发布
+
+Release 由 GitHub Actions 在云端打包，无需本地出包：
+
+- 工作流 `.github/workflows/release.yml`，运行于 `windows-latest`：`npm ci` → `npm test` → 校验 `package.json` 版本与 tag 一致 → `npm run pack:win32` → 上传 run artifact → 将 ZIP 附加到 Release。
+- 触发方式：发布 Release（`release: published`），或手动 `workflow_dispatch`（仅构建并保留 artifact）。
+- `SKIP_PACK_SMOKE=1` 让打包跳过 GUI 启动与便携自检（CI 无桌面会话）；本地打包默认执行自检。
+- 发版步骤：更新 `package.json` 版本并提交 → `git tag -a vX.Y.Z` 推送 → 发布对应 Release。
 
 ## 使用说明
 
@@ -116,8 +128,8 @@ npm run pack:win32     # 生成 dist/MarkdownNotes-<版本>-win32-ia32.zip
 ## 验证记录
 
 - `npm test`：查找/替换、列表续行、大纲、表格对齐与单元格跳转、字数/阅读时间，全部通过。
-- `npm run smoke`：19/19 通过，覆盖目录树与忽略规则、CodeMirror 行号与预览安全、语法高亮、锚点同步滚动、工具栏格式化与自动保存、查找替换、多标签、表格、右键菜单、外部修改冲突、全文搜索跳转、新建/重命名/删除、设置与远程图片开关、历史快照、缺失文件引导、图片落盘与唯一命名、草稿恢复、主题布局、截图。
-- `npm run pack:win32`：PE Machine `0x014C`（IA-32）；打包态启动自检；便携模式自检确认 `data/settings.json` 写入；ASAR 含 `src` 与 `vendor`、无 `node_modules`。
+- `npm run smoke`：20/20 通过，覆盖目录树与忽略规则、CodeMirror 行号与预览安全、语法高亮、锚点双向同步滚动、工具栏格式化与自动保存、查找替换、多标签、表格、右键菜单、外部修改冲突、全文搜索跳转、新建/重命名/删除、最近打开删除与清空、设置与远程图片开关、历史快照、缺失文件引导、图片落盘与唯一命名、草稿恢复、主题布局、截图。
+- `npm run pack:win32`：PE Machine `0x014C`（IA-32）；exe 图标已嵌入（多尺寸 `.ico`）；打包态启动自检；便携模式自检确认 `data/settings.json` 写入；ASAR 含 `src` 与 `vendor`、无 `node_modules` 与 `build/`。
 
 ## 许可证
 
