@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: https: http:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Markdown 笔记</title>
+  <link rel="stylesheet" href="vendor/codemirror.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">M</span>
+        <span class="brand-name">Markdown 笔记</span>
+      </div>
+      <div class="workspace-title" id="workspaceTitle"></div>
+      <div class="top-actions">
+        <button type="button" class="btn" id="btnNewNote" title="新建笔记 (Ctrl+N)">新建</button>
+        <button type="button" class="btn" id="btnOpenFolder" title="打开文件夹 (Ctrl+Shift+O)">打开文件夹</button>
+        <button type="button" class="btn primary" id="btnSave" title="保存 (Ctrl+S)">保存</button>
+        <span class="top-sep"></span>
+        <button type="button" class="icon-btn" id="btnToggleSidebar" title="切换侧边栏 (Ctrl+Shift+B)" aria-label="切换侧边栏">☰</button>
+        <button type="button" class="icon-btn" id="btnTogglePreview" title="切换预览 (Ctrl+E)" aria-label="切换预览">◫</button>
+        <button type="button" class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">◐</button>
+        <button type="button" class="icon-btn" id="btnSettings" title="设置 (Ctrl+,)" aria-label="设置">⚙</button>
+      </div>
+    </header>
+
+    <div class="body">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-head">
+          <div class="ws-name" id="wsName">未打开文件夹</div>
+          <div class="ws-path" id="wsPath">选择一个本地文件夹管理 Markdown 文档</div>
+          <div class="sidebar-actions">
+            <button type="button" class="btn small" id="btnNewFolder" title="新建文件夹">+ 文件夹</button>
+            <button type="button" class="btn small" id="btnRefresh" title="刷新文件夹">刷新</button>
+          </div>
+        </div>
+        <div class="search-box">
+          <input type="search" id="searchInput" placeholder="筛选文件，回车全文搜索" autocomplete="off" spellcheck="false">
+          <button type="button" class="search-clear" id="btnClearSearch" title="清除搜索" aria-label="清除搜索" hidden>×</button>
+        </div>
+        <div class="search-results" id="searchResults" hidden></div>
+        <div class="tree" id="tree" role="tree" aria-label="文档目录"></div>
+        <div class="outline-panel" id="outlinePanel" hidden>
+          <div class="outline-head">
+            <span>大纲</span>
+            <span class="outline-count" id="outlineCount"></span>
+          </div>
+          <div class="outline-list" id="outlineList"></div>
+        </div>
+        <div class="sidebar-empty" id="sidebarEmpty">
+          <p>还没有打开文件夹</p>
+          <button type="button" class="btn" id="btnOpenFolderSidebar">打开文件夹</button>
+        </div>
+        <div class="sidebar-foot" id="sidebarFoot">
+          <span>文件保存在本地，不会上传。</span>
+        </div>
+      </aside>
+
+      <main class="main" id="main">
+        <section class="welcome" id="welcome">
+          <div class="welcome-card">
+            <div class="welcome-logo">M</div>
+            <h1 id="welcomeTitle">Markdown 笔记</h1>
+            <p class="welcome-desc" id="welcomeDesc">轻量、离线、为 Windows 7 32 位优化的 Markdown 编辑器与文档管理工具。</p>
+            <div class="welcome-actions">
+              <button type="button" class="btn primary" id="welcomeOpenFolder">打开文件夹</button>
+              <button type="button" class="btn" id="welcomeOpenFile">打开文件</button>
+              <button type="button" class="btn" id="welcomeNewNote">新建笔记</button>
+            </div>
+            <div class="recent" id="recentWrap" hidden>
+              <div class="recent-title">最近打开</div>
+              <div class="recent-list" id="recentList"></div>
+            </div>
+            <p class="welcome-hint">所有文档以纯文本 Markdown 保存，可用其他编辑器打开；<br>应用不联网、不发送遥测，远程图片默认不加载。</p>
+          </div>
+        </section>
+
+        <section class="editor-wrap" id="editorWrap" hidden>
+          <div class="tabbar" id="tabbar" role="tablist" aria-label="打开的文档"></div>
+
+          <div class="doc-head">
+            <div class="doc-title-wrap">
+              <div class="doc-title" id="docTitle"></div>
+              <div class="doc-path" id="docPath"></div>
+            </div>
+            <div class="doc-actions">
+              <button type="button" class="btn small" id="btnHistory" title="历史快照">历史</button>
+              <button type="button" class="btn small" id="btnSaveAs" title="另存为 (Ctrl+Shift+S)">另存为</button>
+              <button type="button" class="btn small" id="btnReveal" title="在资源管理器中显示">定位</button>
+            </div>
+          </div>
+
+          <div class="conflict" id="conflict" hidden>
+            <span class="conflict-icon" aria-hidden="true">!</span>
+            <span class="conflict-text">文件已被其他程序修改，自动保存已暂停。</span>
+            <button type="button" class="btn small" id="btnOverwrite">覆盖保存</button>
+            <button type="button" class="btn small" id="btnReload">重新加载</button>
+          </div>
+          <div class="conflict missing" id="missing" hidden>
+            <span class="conflict-icon" aria-hidden="true">?</span>
+            <span class="conflict-text">原文件已被删除或移动，自动保存已暂停。</span>
+            <button type="button" class="btn small" id="btnMissingSaveAs">另存为</button>
+            <button type="button" class="btn small" id="btnMissingDiscard">放弃</button>
+          </div>
+          <div class="conflict recovered" id="recoveredBanner" hidden>
+            <span class="conflict-icon" aria-hidden="true">↺</span>
+            <span class="conflict-text">这是恢复的未保存草稿，按 Ctrl+S 保存或另存为。</span>
+            <button type="button" class="btn small" id="btnRecoveredSave">保存</button>
+            <button type="button" class="btn small" id="btnRecoveredSaveAs">另存为</button>
+            <button type="button" class="btn small" id="btnRecoveredDiscard">丢弃</button>
+          </div>
+
+          <div class="toolbar" id="toolbar" role="toolbar" aria-label="Markdown 格式">
+            <button type="button" class="tool-btn" data-format="bold" title="粗体 (Ctrl+B)" aria-label="粗体"><b>B</b></button>
+            <button type="button" class="tool-btn" data-format="italic" title="斜体 (Ctrl+I)" aria-label="斜体"><i>I</i></button>
+            <button type="button" class="tool-btn" data-format="strike" title="删除线" aria-label="删除线"><s>S</s></button>
+            <span class="tool-sep"></span>
+            <button type="button" class="tool-btn" data-format="heading" title="标题" aria-label="标题">H</button>
+            <button type="button" class="tool-btn" data-format="quote" title="引用" aria-label="引用">❝</button>
+            <span class="tool-sep"></span>
+            <button type="button" class="tool-btn" data-format="ul" title="无序列表" aria-label="无序列表">•</button>
+            <button type="button" class="tool-btn" data-format="ol" title="有序列表" aria-label="有序列表">1.</button>
+            <span class="tool-sep"></span>
+            <button type="button" class="tool-btn" data-format="code" title="行内代码 / 代码块" aria-label="代码">&lt;/&gt;</button>
+            <button type="button" class="tool-btn" data-format="link" title="插入链接 (Ctrl+K)" aria-label="插入链接">链接</button>
+            <button type="button" class="tool-btn" data-format="table" title="插入表格" aria-label="插入表格">表</button>
+            <button type="button" class="tool-btn" data-format="image" title="插入本地图片" aria-label="插入图片">图</button>
+            <span class="toolbar-spacer"></span>
+            <button type="button" class="tool-btn" id="btnFind" title="查找与替换 (Ctrl+F)" aria-label="查找与替换">查找</button>
+          </div>
+
+          <div class="findbar" id="findbar" hidden>
+            <input type="text" id="findInput" placeholder="查找" spellcheck="false" autocomplete="off">
+            <span class="find-count" id="findCount">0/0</span>
+            <button type="button" class="tool-btn" id="findPrev" title="上一个 (Shift+Enter)">↑</button>
+            <button type="button" class="tool-btn" id="findNext" title="下一个 (Enter)">↓</button>
+            <button type="button" class="tool-btn toggle" id="findCase" title="区分大小写">Aa</button>
+            <button type="button" class="tool-btn toggle" id="findRegex" title="使用正则表达式">.*</button>
+            <input type="text" id="replaceInput" placeholder="替换为" spellcheck="false" autocomplete="off">
+            <button type="button" class="tool-btn" id="replaceOne" title="替换当前">替换</button>
+            <button type="button" class="tool-btn" id="replaceAll" title="全部替换">全部替换</button>
+            <button type="button" class="tool-btn" id="findClose" title="关闭 (Esc)">×</button>
+          </div>
+
+          <div class="split" id="split">
+            <div class="pane editor-pane">
+              <div id="editor" aria-label="Markdown 编辑区"></div>
+            </div>
+            <div class="splitter" id="splitter" title="拖动调整编辑与预览比例" role="separator" aria-orientation="vertical"></div>
+            <div class="pane preview-pane" id="previewPane">
+              <article class="preview markdown-body" id="preview"></article>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer class="statusbar">
+      <span class="save-state" id="statusSave">就绪</span>
+      <span class="status-file" id="statusFile"></span>
+      <span class="status-spacer"></span>
+      <span id="statusWords">0 字</span>
+      <span id="statusCursor">行 1，列 1</span>
+      <span id="statusEol"></span>
+    </footer>
+  </div>
+
+  <div class="toast-stack" id="toasts" aria-live="polite"></div>
+
+  <div class="modal-backdrop" id="modal" hidden>
+    <form class="modal" id="modalForm" autocomplete="off">
+      <h2 id="modalTitle">新建笔记</h2>
+      <p id="modalDesc"></p>
+      <input type="text" id="modalInput" spellcheck="false">
+      <div class="modal-error" id="modalError"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="modalCancel">取消</button>
+        <button type="submit" class="btn primary" id="modalOk">确定</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="settingsModal" hidden>
+    <form class="modal wide" id="settingsForm" autocomplete="off">
+      <h2>设置</h2>
+      <div class="settings-grid">
+        <label class="setting-row"><span>主题</span>
+          <select id="setTheme">
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select>
+        </label>
+        <label class="setting-row"><span>编辑器字号</span>
+          <input type="number" id="setFontSize" min="12" max="22" step="1">
+        </label>
+        <label class="setting-row"><span>编辑区行宽</span>
+          <select id="setLineWidth">
+            <option value="720">窄（约 720px）</option>
+            <option value="900">中（约 900px）</option>
+            <option value="0">全宽</option>
+          </select>
+        </label>
+        <label class="setting-row"><span>自动保存间隔（毫秒）</span>
+          <input type="number" id="setAutosaveDelay" min="300" max="5000" step="100">
+        </label>
+        <label class="setting-row"><span>字数目标（0 为关闭）</span>
+          <input type="number" id="setWordGoal" min="0" max="1000000" step="100">
+        </label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setAutosave"><span>自动保存</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setPreview"><span>显示预览</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setSidebar"><span>显示侧边栏</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setOutline"><span>显示大纲</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setRemoteImages"><span>加载远程图片（需要网络）</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setSyntaxHighlight"><span>代码块语法高亮</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setReadingTime"><span>显示预计阅读时间</span></label>
+        <label class="setting-row full"><span>忽略目录 / 通配符</span>
+          <input type="text" id="setIgnoreDirs" placeholder="用逗号分隔，例如 .obsidian, private, *.tmp">
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn small" id="settingsLogs">打开日志目录</button>
+        <button type="button" class="btn small" id="settingsCopyLog">复制日志路径</button>
+        <button type="button" class="btn small" id="settingsClearLog">清空日志</button>
+        <span class="status-spacer"></span>
+        <button type="button" class="btn" id="settingsCancel">取消</button>
+        <button type="submit" class="btn primary" id="settingsSave">保存</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="modal-backdrop" id="historyModal" hidden>
+    <div class="modal wide">
+      <h2>历史快照</h2>
+      <p id="historyDesc">保存前会自动保留最近快照，也可手动创建。</p>
+      <div class="history-list" id="historyList"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn small" id="historyCreate">立即备份</button>
+        <span class="status-spacer"></span>
+        <button type="button" class="btn" id="historyClose">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop" id="recoveryModal" hidden>
+    <div class="modal wide">
+      <h2>恢复未保存草稿</h2>
+      <p id="recoveryDesc">检测到上次退出时未保存的内容，可以恢复为标签页。</p>
+      <div class="history-list" id="recoveryList"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="recoveryDiscard">丢弃全部</button>
+        <span class="status-spacer"></span>
+        <button type="button" class="btn primary" id="recoveryRestore">恢复全部</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="context-menu" id="contextMenu" hidden></div>
+
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/highlight.min.js"></script>
+  <script src="vendor/codemirror.js"></script>
+  <script src="vendor/addon-overlay.js"></script>
+  <script src="vendor/mode-xml.js"></script>
+  <script src="vendor/mode-javascript.js"></script>
+  <script src="vendor/mode-markdown.js"></script>
+  <script src="vendor/mode-gfm.js"></script>
+  <script src="vendor/addon-active-line.js"></script>
+  <script src="shared/text.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+node_modules/
+dist/
+tmp/
+data/
+test-workspace/
+src/vendor/
+npm-debug.log*
+*.log
