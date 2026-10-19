@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const { packager } = require('@electron/packager');
+const { buildIcon } = require('./make-icon');
 
 const root = path.join(__dirname, '..');
 const pkg = require(path.join(root, 'package.json'));
@@ -68,6 +69,10 @@ function zipFolder(folder, zipPath) {
 (async () => {
   fs.rmSync(outDir, { recursive: true, force: true });
 
+  const iconPath = path.join(root, 'build', 'icon.ico');
+  const iconResult = buildIcon(iconPath);
+  console.log(`图标：${iconResult.outputPath}`);
+
   const appPaths = await packager({
     dir: root,
     out: outDir,
@@ -75,6 +80,7 @@ function zipFolder(folder, zipPath) {
     platform: 'win32',
     arch: 'ia32',
     electronVersion,
+    icon: iconPath,
     asar: true,
     overwrite: true,
     prune: true,
@@ -92,8 +98,10 @@ function zipFolder(folder, zipPath) {
       /^\/scripts($|\/)/,
       /^\/tmp($|\/)/,
       /^\/data($|\/)/,
+      /^\/build($|\/)/,
       /^\/test-workspace($|\/)/,
       /^\/todo\.md$/,
+      /^\/CHANGELOG\.md$/,
       /^\/README\.md$/,
       /^\/\.gitignore$/,
       /^\/package-lock\.json$/

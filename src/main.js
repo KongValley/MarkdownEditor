@@ -709,6 +709,7 @@ function handleClose(event) {
 
 function createWindow() {
   const bounds = safeBounds();
+  const iconPath = path.join(__dirname, '..', 'build', 'icon.ico');
   win = new BrowserWindow({
     ...bounds,
     minWidth: 860,
@@ -716,6 +717,7 @@ function createWindow() {
     show: false,
     backgroundColor: '#f5f6f8',
     title: APP_TITLE,
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
