@@ -5,6 +5,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
   getRecent: () => ipcRenderer.invoke('app:recent'),
+  removeRecent: (target) => ipcRenderer.invoke('recent:remove', target),
+  clearRecent: () => ipcRenderer.invoke('recent:clear'),
 
   getSettings: () => ipcRenderer.invoke('settings:get'),
   updateSettings: (patch) => ipcRenderer.invoke('settings:update', patch),

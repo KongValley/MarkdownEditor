@@ -72,7 +72,10 @@
               <button type="button" class="btn" id="welcomeNewNote">新建笔记</button>
             </div>
             <div class="recent" id="recentWrap" hidden>
-              <div class="recent-title">最近打开</div>
+              <div class="recent-head">
+                <span class="recent-title">最近打开</span>
+                <button type="button" class="link-btn" id="btnClearRecent" title="清空最近打开记录">清空</button>
+              </div>
               <div class="recent-list" id="recentList"></div>
             </div>
             <p class="welcome-hint">所有文档以纯文本 Markdown 保存，可用其他编辑器打开；<br>应用不联网、不发送遥测，远程图片默认不加载。</p>

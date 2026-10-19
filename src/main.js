@@ -850,6 +850,18 @@ function registerIpc() {
 
   handle('app:bootstrap', bootstrapSnapshot);
   handle('app:recent', () => settings.recent);
+  handle('recent:remove', (target) => {
+    if (typeof target !== 'string' || !target) throw new Error('无效的最近记录');
+    const key = path.resolve(target).toLowerCase();
+    settings.recent = settings.recent.filter((item) => item.path.toLowerCase() !== key);
+    persistSettings();
+    return settings.recent;
+  });
+  handle('recent:clear', () => {
+    settings.recent = [];
+    persistSettings();
+    return settings.recent;
+  });
 
   handle('workspace:choose', async () => {
     const result = await dialog.showOpenDialog(win, {
@@ -890,10 +902,9 @@ function registerIpc() {
     allowExternal(abs);
     const doc = await files.readDoc(abs);
     doc.relPath = files.toRelPath(state.workspaceRoot, abs);
-    if (settings.lastFile !== abs) {
-      settings.lastFile = abs;
-      persistSettings();
-    }
+    addRecent('file', abs);
+    settings.lastFile = abs;
+    persistSettings();
     return doc;
   });
 

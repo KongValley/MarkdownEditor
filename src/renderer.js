@@ -43,6 +43,7 @@ const el = {
   welcomeNewNote: $('welcomeNewNote'),
   recentWrap: $('recentWrap'),
   recentList: $('recentList'),
+  btnClearRecent: $('btnClearRecent'),
   editorWrap: $('editorWrap'),
   editor: $('editor'),
   tabbar: $('tabbar'),
@@ -500,10 +501,11 @@ function renderRecent() {
   el.recentList.replaceChildren();
   el.recentWrap.hidden = state.recent.length === 0;
   for (const item of state.recent.slice(0, 8)) {
-    const button = document.createElement('button');
-    button.type = 'button';
+    const button = document.createElement('div');
     button.className = 'recent-item';
     button.title = item.path;
+    button.setAttribute('role', 'button');
+    button.tabIndex = 0;
     const type = document.createElement('span');
     type.className = 'recent-type';
     type.textContent = item.type === 'folder' ? '夹' : '文';
@@ -516,9 +518,57 @@ function renderRecent() {
     path.className = 'recent-path';
     path.textContent = item.path;
     main.append(name, path);
-    button.append(type, main);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'recent-remove';
+    remove.textContent = '×';
+    remove.title = '删除这条记录';
+    remove.setAttribute('aria-label', `删除最近记录 ${item.name || item.path}`);
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      removeRecentItem(item);
+    });
+    button.append(type, main, remove);
     button.addEventListener('click', () => openRecentItem(item));
+    button.addEventListener('keydown', (event) => {
+      if (event.target !== button) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openRecentItem(item);
+      }
+    });
     el.recentList.append(button);
+  }
+}
+
+async function removeRecentItem(item) {
+  if (!item || !item.path) return;
+  try {
+    state.recent = await bridge.removeRecent(item.path);
+    renderRecent();
+  } catch (error) {
+    showToast(`删除最近记录失败：${error.message}`, 'error');
+  }
+}
+
+async function clearRecentList() {
+  if (state.recent.length === 0) return;
+  const answer = await bridge.confirm({
+    type: 'warning',
+    title: '清空最近打开',
+    message: '清空最近打开记录？',
+    detail: '只会清空列表，不会删除磁盘上的文件或文件夹。',
+    buttons: ['取消', '清空'],
+    defaultId: 0,
+    cancelId: 0
+  });
+  if (answer.response !== 1) return;
+  try {
+    state.recent = await bridge.clearRecent();
+    renderRecent();
+    showToast('已清空最近打开', 'success');
+  } catch (error) {
+    showToast(`清空失败：${error.message}`, 'error');
   }
 }
 
@@ -2300,6 +2350,7 @@ function bindEvents() {
   el.welcomeOpenFolder.addEventListener('click', openWorkspaceDialog);
   el.welcomeOpenFile.addEventListener('click', openFileDialog);
   el.welcomeNewNote.addEventListener('click', () => newNote());
+  el.btnClearRecent.addEventListener('click', clearRecentList);
   el.btnNewFolder.addEventListener('click', () => newFolder());
   el.btnRefresh.addEventListener('click', () => refreshWorkspace(false));
   el.btnSave.addEventListener('click', () => requestSave());
@@ -2606,6 +2657,7 @@ async function init() {
         getState: () => ({
           workspaceRoot: state.workspace ? state.workspace.root : null,
           settings: { ...state.settings },
+          recent: state.recent.map((item) => ({ ...item })),
           activeId: state.activeId,
           tabs: state.tabs.map((tab) => ({
             id: tab.id,

@@ -652,11 +652,56 @@ input:focus-visible {
   border-top: 1px solid var(--border);
 }
 
-.recent-title {
+.recent-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 8px;
+}
+
+.recent-title {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
+}
+
+.link-btn {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.link-btn:hover {
+  background: var(--panel-2);
+  color: var(--accent);
+}
+
+.recent-remove {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--faint);
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+}
+
+.recent-item:hover .recent-remove,
+.recent-remove:focus-visible {
+  opacity: 1;
+}
+
+.recent-remove:hover {
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .recent-list {
@@ -675,10 +720,17 @@ input:focus-visible {
   border-radius: 6px;
   background: transparent;
   text-align: left;
+  cursor: pointer;
+  user-select: none;
 }
 
 .recent-item:hover {
   background: var(--panel-2);
+}
+
+.recent-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .recent-type {

@@ -285,6 +285,17 @@ async function run(context) {
       assert(!fs.existsSync(path.join(testRoot, '子目录', '冒烟笔记.md')), '旧文件仍然存在');
     });
 
+    await step('最近打开删除与清空', async () => {
+      await waitFor('window.__mdTest.getState().recent.length >= 1', '最近记录生成');
+      assert(await js('Boolean(document.querySelector(".recent-item .recent-remove"))'), '最近记录缺少删除按钮');
+      const before = (await getState()).recent.length;
+      await js('document.querySelector(".recent-item .recent-remove").click()');
+      await waitFor(`window.__mdTest.getState().recent.length === ${before - 1}`, '单条删除');
+      await js('document.getElementById("btnClearRecent").click()');
+      await waitFor('window.__mdTest.getState().recent.length === 0', '清空最近记录');
+      assert(await js('document.getElementById("recentWrap").hidden === true'), '清空后最近区域未隐藏');
+    });
+
     await step('设置界面与远程图片开关', async () => {
       await js('window.__mdTest.openRel("笔记.md")');
       await waitFor('window.__mdTest.getText().includes("# 标题")', '设置前打开笔记');
