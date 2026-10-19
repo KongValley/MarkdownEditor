@@ -11,6 +11,7 @@ const pkg = require(path.join(root, 'package.json'));
 const outDir = path.join(root, 'dist');
 const appName = 'MarkdownNotes';
 const electronVersion = '22.3.27';
+const SKIP_SMOKE = process.env.SKIP_PACK_SMOKE === '1';
 
 function verifyPe32(filePath) {
   const fd = fs.openSync(filePath, 'r');
@@ -105,8 +106,12 @@ function zipFolder(folder, zipPath) {
   if (!fs.existsSync(path.join(appDir, 'resources', 'app.asar'))) {
     throw new Error('缺少 resources/app.asar');
   }
-  verifyBoot(exePath);
-  verifyPortable(exePath, appDir);
+  if (SKIP_SMOKE) {
+    console.log('SKIP_PACK_SMOKE=1，跳过打包态启动与便携自检（CI 无桌面会话）');
+  } else {
+    verifyBoot(exePath);
+    verifyPortable(exePath, appDir);
+  }
 
   const zipPath = path.join(outDir, `${appName}-${pkg.version}-win32-ia32.zip`);
   zipFolder(appDir, zipPath);
