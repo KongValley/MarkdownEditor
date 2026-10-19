@@ -1,16 +1,17 @@
 {
   "name": "markdown-notes",
   "productName": "Markdown 笔记",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "轻量 Markdown 编辑器与文档管理工具，支持 Windows 7 32 位",
   "main": "src/main.js",
   "private": true,
   "license": "MIT",
   "author": "Markdown Notes",
   "scripts": {
-    "postinstall": "node scripts/vendor.js",
+    "postinstall": "npm run vendor && npm run icon",
     "vendor": "node scripts/vendor.js",
-    "start": "npm run vendor && electron .",
+    "icon": "node scripts/make-icon.js",
+    "start": "npm run vendor && npm run icon && electron .",
     "test": "node scripts/test-text.js",
     "smoke": "npm run vendor && electron . --smoke-test",
     "pack:win32": "npm run vendor && node scripts/package.js"
