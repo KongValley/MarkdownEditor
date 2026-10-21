@@ -11,18 +11,20 @@
 <body>
   <div id="app" class="app">
     <header class="topbar">
-      <div class="brand">
+      <button type="button" class="brand brand-btn" id="btnHome" title="工作台">
         <span class="brand-mark">M</span>
         <span class="brand-name">Markdown 笔记</span>
+      </button>
+      <div class="top-crumb" id="topCrumb">工作台</div>
+      <div class="top-search">
+        <input type="search" id="searchInput" placeholder="筛选目录，回车搜索全部知识库" autocomplete="off" spellcheck="false">
+        <button type="button" class="search-clear" id="btnClearSearch" title="清除搜索" aria-label="清除搜索" hidden>×</button>
       </div>
-      <div class="workspace-title" id="workspaceTitle"></div>
       <div class="top-actions">
         <button type="button" class="btn" id="btnNewNote" title="新建笔记 (Ctrl+N)">新建</button>
-        <button type="button" class="btn" id="btnOpenFolder" title="打开文件夹 (Ctrl+Shift+O)">打开文件夹</button>
         <button type="button" class="btn primary" id="btnSave" title="保存 (Ctrl+S)">保存</button>
         <span class="top-sep"></span>
         <button type="button" class="icon-btn" id="btnToggleSidebar" title="切换侧边栏 (Ctrl+Shift+B)" aria-label="切换侧边栏">☰</button>
-        <button type="button" class="icon-btn" id="btnTogglePreview" title="切换预览 (Ctrl+E)" aria-label="切换预览">◫</button>
         <button type="button" class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">◐</button>
         <button type="button" class="icon-btn" id="btnSettings" title="设置 (Ctrl+,)" aria-label="设置">⚙</button>
       </div>
@@ -30,30 +32,26 @@
 
     <div class="body">
       <aside class="sidebar" id="sidebar">
+        <div class="library-section">
+          <div class="section-head">
+            <span>知识库</span>
+            <button type="button" class="icon-btn" id="btnAddLibrary" title="添加知识库" aria-label="添加知识库">＋</button>
+          </div>
+          <div class="library-list" id="libraryList"></div>
+        </div>
         <div class="sidebar-head">
-          <div class="ws-name" id="wsName">未打开文件夹</div>
-          <div class="ws-path" id="wsPath">选择一个本地文件夹管理 Markdown 文档</div>
+          <div class="ws-name" id="wsName">未选择知识库</div>
+          <div class="ws-path" id="wsPath">选择一个本地文件夹作为知识库</div>
           <div class="sidebar-actions">
+            <button type="button" class="btn small" id="btnNewNoteSidebar" title="新建笔记">+ 笔记</button>
             <button type="button" class="btn small" id="btnNewFolder" title="新建文件夹">+ 文件夹</button>
             <button type="button" class="btn small" id="btnRefresh" title="刷新文件夹">刷新</button>
           </div>
         </div>
-        <div class="search-box">
-          <input type="search" id="searchInput" placeholder="筛选文件，回车全文搜索" autocomplete="off" spellcheck="false">
-          <button type="button" class="search-clear" id="btnClearSearch" title="清除搜索" aria-label="清除搜索" hidden>×</button>
-        </div>
-        <div class="search-results" id="searchResults" hidden></div>
         <div class="tree" id="tree" role="tree" aria-label="文档目录"></div>
-        <div class="outline-panel" id="outlinePanel" hidden>
-          <div class="outline-head">
-            <span>大纲</span>
-            <span class="outline-count" id="outlineCount"></span>
-          </div>
-          <div class="outline-list" id="outlineList"></div>
-        </div>
         <div class="sidebar-empty" id="sidebarEmpty">
-          <p>还没有打开文件夹</p>
-          <button type="button" class="btn" id="btnOpenFolderSidebar">打开文件夹</button>
+          <p id="sidebarEmptyText">还没有知识库</p>
+          <button type="button" class="btn" id="btnOpenFolderSidebar">添加知识库</button>
         </div>
         <div class="sidebar-foot" id="sidebarFoot">
           <span>文件保存在本地，不会上传。</span>
@@ -61,35 +59,104 @@
       </aside>
 
       <main class="main" id="main">
-        <section class="welcome" id="welcome">
-          <div class="welcome-card">
-            <div class="welcome-logo">M</div>
-            <h1 id="welcomeTitle">Markdown 笔记</h1>
-            <p class="welcome-desc" id="welcomeDesc">轻量、离线、为 Windows 7 32 位优化的 Markdown 编辑器与文档管理工具。</p>
-            <div class="welcome-actions">
-              <button type="button" class="btn primary" id="welcomeOpenFolder">打开文件夹</button>
-              <button type="button" class="btn" id="welcomeOpenFile">打开文件</button>
-              <button type="button" class="btn" id="welcomeNewNote">新建笔记</button>
-            </div>
-            <div class="recent" id="recentWrap" hidden>
-              <div class="recent-head">
-                <span class="recent-title">最近打开</span>
-                <button type="button" class="link-btn" id="btnClearRecent" title="清空最近打开记录">清空</button>
+        <div class="tabbar" id="tabbar" role="tablist" aria-label="打开的文档"></div>
+
+        <section class="home-view" id="homeView" hidden>
+          <div class="home-inner">
+            <header class="home-hero">
+              <div class="welcome-logo">M</div>
+              <h1 id="welcomeTitle">本地知识库</h1>
+              <p class="welcome-desc" id="welcomeDesc">把所有文档留在本地文件夹里，离线浏览、写作与检索。</p>
+              <div class="welcome-actions">
+                <button type="button" class="btn primary" id="welcomeOpenFolder">添加知识库</button>
+                <button type="button" class="btn" id="welcomeOpenFile">打开文件</button>
+                <button type="button" class="btn" id="welcomeNewNote">新建笔记</button>
               </div>
-              <div class="recent-list" id="recentList"></div>
+            </header>
+            <section class="home-section">
+              <div class="home-section-head">
+                <h2>我的知识库</h2>
+                <button type="button" class="link-btn" id="btnAddLibraryCard">＋ 添加</button>
+              </div>
+              <div class="lib-cards" id="libraryCards"></div>
+            </section>
+            <div class="home-columns">
+              <section class="home-section">
+                <div class="home-section-head">
+                  <h2>最近文档</h2>
+                  <button type="button" class="link-btn" id="btnClearRecent" title="清空最近打开记录">清空</button>
+                </div>
+                <div class="recent" id="recentWrap" hidden>
+                  <div class="recent-list" id="recentList"></div>
+                </div>
+                <p class="home-empty" id="recentEmpty">还没有最近打开的文档。</p>
+              </section>
+              <section class="home-section">
+                <div class="home-section-head">
+                  <h2>我的收藏</h2>
+                </div>
+                <div class="recent starred" id="starredWrap" hidden>
+                  <div class="recent-list" id="starredList"></div>
+                </div>
+                <p class="home-empty" id="starredEmpty">在文档右上角点击 ☆ 收藏。</p>
+              </section>
             </div>
             <p class="welcome-hint">所有文档以纯文本 Markdown 保存，可用其他编辑器打开；<br>应用不联网、不发送遥测，远程图片默认不加载。</p>
           </div>
         </section>
 
-        <section class="editor-wrap" id="editorWrap" hidden>
-          <div class="tabbar" id="tabbar" role="tablist" aria-label="打开的文档"></div>
+        <section class="library-view" id="libraryView" hidden>
+          <div class="library-inner">
+            <header class="lib-hero">
+              <div class="lib-hero-main">
+                <div class="lib-icon" aria-hidden="true">知</div>
+                <div class="lib-hero-text">
+                  <h1 id="libTitle"></h1>
+                  <p id="libPath"></p>
+                </div>
+              </div>
+              <div class="lib-hero-actions">
+                <button type="button" class="btn primary" id="btnLibNewNote">新建笔记</button>
+                <button type="button" class="btn" id="btnLibRefresh">刷新</button>
+                <select id="libSort" class="select" aria-label="文档排序">
+                  <option value="updated">按更新时间</option>
+                  <option value="name">按名称</option>
+                </select>
+              </div>
+            </header>
+            <p class="lib-hint" id="libTruncated" hidden></p>
+            <div class="tag-filter" id="tagFilter" hidden></div>
+            <div class="lib-loading" id="libLoading" hidden>正在整理文档索引…</div>
+            <div class="doc-list" id="docList"></div>
+            <div class="lib-empty" id="libEmpty" hidden></div>
+          </div>
+        </section>
 
+        <section class="search-view" id="searchView" hidden>
+          <div class="search-inner">
+            <header class="search-head">
+              <div>
+                <h1>搜索结果</h1>
+                <p id="searchSummary"></p>
+              </div>
+              <button type="button" class="btn small" id="btnSearchClose">关闭</button>
+            </header>
+            <div class="search-results" id="searchResults"></div>
+          </div>
+        </section>
+
+        <section class="editor-wrap" id="editorWrap" hidden>
           <div class="doc-head">
             <div class="doc-title-wrap">
               <div class="doc-title" id="docTitle"></div>
               <div class="doc-path" id="docPath"></div>
             </div>
+            <div class="view-switch" id="viewSwitch" role="group" aria-label="视图模式">
+              <button type="button" data-mode="editor" title="仅编辑">编辑</button>
+              <button type="button" data-mode="split" class="active" title="编辑与预览分栏">分栏</button>
+              <button type="button" data-mode="reading" title="全宽阅读 (Ctrl+E)">阅读</button>
+            </div>
+            <button type="button" class="icon-btn star-btn" id="btnStar" title="收藏" aria-label="收藏">☆</button>
             <div class="doc-actions">
               <button type="button" class="btn small" id="btnHistory" title="历史快照">历史</button>
               <button type="button" class="btn small" id="btnSaveAs" title="另存为 (Ctrl+Shift+S)">另存为</button>
@@ -149,14 +216,33 @@
             <button type="button" class="tool-btn" id="findClose" title="关闭 (Esc)">×</button>
           </div>
 
-          <div class="split" id="split">
-            <div class="pane editor-pane">
-              <div id="editor" aria-label="Markdown 编辑区"></div>
+          <div class="doc-body">
+            <div class="split" id="split">
+              <div class="pane editor-pane">
+                <div id="editor" aria-label="Markdown 编辑区"></div>
+              </div>
+              <div class="splitter" id="splitter" title="拖动调整编辑与预览比例" role="separator" aria-orientation="vertical"></div>
+              <div class="pane preview-pane" id="previewPane">
+                <article class="preview markdown-body" id="preview"></article>
+              </div>
             </div>
-            <div class="splitter" id="splitter" title="拖动调整编辑与预览比例" role="separator" aria-orientation="vertical"></div>
-            <div class="pane preview-pane" id="previewPane">
-              <article class="preview markdown-body" id="preview"></article>
-            </div>
+            <aside class="doc-rail" id="docRail" hidden>
+              <div class="rail-block outline-panel" id="outlinePanel" hidden>
+                <div class="outline-head">
+                  <span>大纲</span>
+                  <span class="outline-count" id="outlineCount"></span>
+                </div>
+                <div class="outline-list" id="outlineList"></div>
+              </div>
+              <div class="rail-block" id="docTagsBlock">
+                <div class="rail-head">标签</div>
+                <div class="tag-list" id="docTags"></div>
+              </div>
+              <div class="rail-block" id="backlinksBlock">
+                <div class="rail-head">引用 <span class="rail-count" id="backlinkCount"></span></div>
+                <div class="backlink-list" id="backlinkList"></div>
+              </div>
+            </aside>
           </div>
         </section>
       </main>
@@ -214,9 +300,8 @@
           <input type="number" id="setWordGoal" min="0" max="1000000" step="100">
         </label>
         <label class="setting-row checkbox"><input type="checkbox" id="setAutosave"><span>自动保存</span></label>
-        <label class="setting-row checkbox"><input type="checkbox" id="setPreview"><span>显示预览</span></label>
         <label class="setting-row checkbox"><input type="checkbox" id="setSidebar"><span>显示侧边栏</span></label>
-        <label class="setting-row checkbox"><input type="checkbox" id="setOutline"><span>显示大纲</span></label>
+        <label class="setting-row checkbox"><input type="checkbox" id="setOutline"><span>显示文档信息栏（大纲/标签/引用）</span></label>
         <label class="setting-row checkbox"><input type="checkbox" id="setRemoteImages"><span>加载远程图片（需要网络）</span></label>
         <label class="setting-row checkbox"><input type="checkbox" id="setSyntaxHighlight"><span>代码块语法高亮</span></label>
         <label class="setting-row checkbox"><input type="checkbox" id="setReadingTime"><span>显示预计阅读时间</span></label>

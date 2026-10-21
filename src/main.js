@@ -6,6 +6,7 @@ const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const files = require('./main/files');
+const catalog = require('./main/catalog');
 const RecoveryStore = require('./main/recovery');
 const backups = require('./main/backups');
 
@@ -49,6 +50,7 @@ let backupsDir = '';
 let recoveryFile = '';
 let recoveryStore = null;
 let testRoot = null;
+let secondRoot = null;
 let allowClose = false;
 let closeInFlight = false;
 let boundsTimer = null;
@@ -57,15 +59,16 @@ function defaultSettings() {
   return {
     bounds: null,
     maximized: false,
-    lastWorkspace: null,
     lastFile: null,
+    libraries: [],
+    activeLibrary: null,
+    starred: [],
     recent: [],
     theme: 'light',
     fontSize: 15,
     lineWidth: 0,
     autosave: true,
     autosaveDelay: 900,
-    preview: true,
     sidebar: true,
     outline: true,
     split: 0.5,
@@ -73,7 +76,9 @@ function defaultSettings() {
     syntaxHighlight: true,
     showReadingTime: true,
     wordGoal: 0,
-    ignoreDirs: []
+    ignoreDirs: [],
+    viewMode: 'split',
+    librarySort: 'updated'
   };
 }
 
@@ -107,6 +112,49 @@ function normalizeIgnoreDirs(value) {
   return result;
 }
 
+function normalizeLibraries(value) {
+  const result = [];
+  const seen = new Set();
+  if (!Array.isArray(value)) return result;
+  for (const item of value) {
+    if (!item || typeof item.path !== 'string' || !path.isAbsolute(item.path)) continue;
+    const abs = path.resolve(item.path);
+    const key = abs.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const name = typeof item.name === 'string' && item.name.trim()
+      ? item.name.trim().slice(0, 80)
+      : (path.basename(abs) || abs);
+    result.push({
+      path: abs,
+      name,
+      addedAt: Number.isFinite(Number(item.addedAt)) ? Number(item.addedAt) : Date.now(),
+      lastOpenedAt: Number.isFinite(Number(item.lastOpenedAt)) ? Number(item.lastOpenedAt) : 0,
+      docCount: clampInt(item.docCount, 0, 1000000, 0)
+    });
+    if (result.length >= 50) break;
+  }
+  return result;
+}
+
+function normalizeStarred(value) {
+  if (!Array.isArray(value)) return [];
+  const result = [];
+  const seen = new Set();
+  for (const item of value) {
+    if (!item || typeof item.library !== 'string' || !path.isAbsolute(item.library)) continue;
+    if (typeof item.relPath !== 'string' || !item.relPath || item.relPath.includes('\0')) continue;
+    const library = path.resolve(item.library);
+    const relPath = item.relPath.replace(/\\/g, '/');
+    const key = `${library.toLowerCase()}\0${relPath.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ library, relPath, at: Number.isFinite(Number(item.at)) ? Number(item.at) : 0 });
+    if (result.length >= 200) break;
+  }
+  return result;
+}
+
 function normalizeSettings(raw) {
   const result = defaultSettings();
   if (!raw || typeof raw !== 'object') return result;
@@ -121,19 +169,37 @@ function normalizeSettings(raw) {
     };
   }
   result.maximized = Boolean(raw.maximized);
-  result.lastWorkspace = typeof raw.lastWorkspace === 'string' ? raw.lastWorkspace : null;
+  result.libraries = normalizeLibraries(raw.libraries);
+  if (result.libraries.length === 0 && typeof raw.lastWorkspace === 'string' && path.isAbsolute(raw.lastWorkspace)) {
+    const abs = path.resolve(raw.lastWorkspace);
+    result.libraries.push({
+      path: abs,
+      name: path.basename(abs) || abs,
+      addedAt: Date.now(),
+      lastOpenedAt: 0,
+      docCount: 0
+    });
+  }
+  const rawActive = typeof raw.activeLibrary === 'string' && raw.activeLibrary
+    ? raw.activeLibrary
+    : (typeof raw.lastWorkspace === 'string' ? raw.lastWorkspace : '');
+  const active = rawActive
+    ? result.libraries.find((lib) => samePath(lib.path, rawActive))
+    : null;
+  result.activeLibrary = active ? active.path : (result.libraries[0] ? result.libraries[0].path : null);
+  result.starred = normalizeStarred(raw.starred);
   result.lastFile = typeof raw.lastFile === 'string' ? raw.lastFile : null;
   if (Array.isArray(raw.recent)) {
     const seen = new Set();
     result.recent = raw.recent.filter((item) => {
       if (!item || typeof item.path !== 'string' || !path.isAbsolute(item.path)) return false;
+      if (item.type === 'folder') return false;
       const key = item.path.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
-      return item.type === 'folder' || item.type === 'file';
+      return true;
     }).slice(0, 10).map((item) => ({
-      type: item.type,
-      path: item.path,
+      path: path.resolve(item.path),
       name: typeof item.name === 'string' && item.name ? item.name : path.basename(item.path) || item.path,
       at: Number(item.at) || 0
     }));
@@ -143,7 +209,6 @@ function normalizeSettings(raw) {
   result.lineWidth = [0, 720, 900].includes(Number(raw.lineWidth)) ? Number(raw.lineWidth) : 0;
   result.autosave = raw.autosave !== false;
   result.autosaveDelay = clampInt(raw.autosaveDelay, 300, 5000, 900);
-  result.preview = raw.preview !== false;
   result.sidebar = raw.sidebar !== false;
   result.outline = raw.outline !== false;
   result.split = clampNumber(raw.split, 0.2, 0.8, 0.5);
@@ -152,6 +217,10 @@ function normalizeSettings(raw) {
   result.showReadingTime = raw.showReadingTime !== false;
   result.wordGoal = clampInt(raw.wordGoal, 0, 1000000, 0);
   result.ignoreDirs = normalizeIgnoreDirs(raw.ignoreDirs);
+  result.viewMode = ['split', 'editor', 'reading'].includes(raw.viewMode)
+    ? raw.viewMode
+    : (raw.preview === false ? 'editor' : 'split');
+  result.librarySort = raw.librarySort === 'name' ? 'name' : 'updated';
   return result;
 }
 
@@ -162,7 +231,6 @@ function publicSettings() {
     lineWidth: settings.lineWidth,
     autosave: settings.autosave,
     autosaveDelay: settings.autosaveDelay,
-    preview: settings.preview,
     sidebar: settings.sidebar,
     outline: settings.outline,
     split: settings.split,
@@ -170,7 +238,9 @@ function publicSettings() {
     syntaxHighlight: settings.syntaxHighlight,
     showReadingTime: settings.showReadingTime,
     wordGoal: settings.wordGoal,
-    ignoreDirs: settings.ignoreDirs
+    ignoreDirs: settings.ignoreDirs,
+    viewMode: settings.viewMode,
+    librarySort: settings.librarySort
   };
 }
 
@@ -184,7 +254,6 @@ function applySettingsPatch(patch) {
   }
   if (patch.autosave !== undefined) settings.autosave = Boolean(patch.autosave);
   if (patch.autosaveDelay !== undefined) settings.autosaveDelay = clampInt(patch.autosaveDelay, 300, 5000, settings.autosaveDelay);
-  if (patch.preview !== undefined) settings.preview = Boolean(patch.preview);
   if (patch.sidebar !== undefined) settings.sidebar = Boolean(patch.sidebar);
   if (patch.outline !== undefined) settings.outline = Boolean(patch.outline);
   if (patch.split !== undefined) settings.split = clampNumber(patch.split, 0.2, 0.8, settings.split);
@@ -193,6 +262,8 @@ function applySettingsPatch(patch) {
   if (patch.showReadingTime !== undefined) settings.showReadingTime = Boolean(patch.showReadingTime);
   if (patch.wordGoal !== undefined) settings.wordGoal = clampInt(patch.wordGoal, 0, 1000000, settings.wordGoal);
   if (patch.ignoreDirs !== undefined) settings.ignoreDirs = normalizeIgnoreDirs(patch.ignoreDirs);
+  if (['split', 'editor', 'reading'].includes(patch.viewMode)) settings.viewMode = patch.viewMode;
+  if (patch.librarySort === 'updated' || patch.librarySort === 'name') settings.librarySort = patch.librarySort;
   persistSettings();
   return publicSettings();
 }
@@ -302,12 +373,78 @@ function formatError(error) {
   return error.message || String(error);
 }
 
-function addRecent(type, absPath) {
+function samePath(a, b) {
+  return path.resolve(String(a || '')).toLowerCase() === path.resolve(String(b || '')).toLowerCase();
+}
+
+function findLibrary(absPath) {
+  return settings.libraries.find((lib) => samePath(lib.path, absPath)) || null;
+}
+
+function findLibraryForPath(absPath) {
+  return settings.libraries.find((lib) => files.isInside(lib.path, absPath)) || null;
+}
+
+async function describeLibraries() {
+  const result = [];
+  for (const lib of settings.libraries) {
+    let exists = false;
+    try {
+      exists = (await fsp.stat(lib.path)).isDirectory();
+    } catch {
+      exists = false;
+    }
+    result.push({
+      ...lib,
+      exists,
+      active: Boolean(settings.activeLibrary && samePath(lib.path, settings.activeLibrary))
+    });
+  }
+  return result;
+}
+
+async function publicStarred() {
+  const result = [];
+  const kept = [];
+  let changed = false;
+  for (const star of settings.starred) {
+    const lib = findLibrary(star.library);
+    if (!lib) {
+      changed = true;
+      continue;
+    }
+    try {
+      const abs = files.resolveInside(lib.path, star.relPath);
+      const stat = await fsp.stat(abs);
+      if (!stat.isFile()) {
+        changed = true;
+        continue;
+      }
+      kept.push(star);
+      result.push({
+        library: lib.path,
+        libraryName: lib.name,
+        relPath: star.relPath,
+        name: path.basename(abs),
+        at: star.at
+      });
+    } catch {
+      changed = true;
+    }
+  }
+  if (changed) {
+    settings.starred = kept;
+    persistSettings();
+  }
+  result.sort((a, b) => b.at - a.at);
+  return result;
+}
+
+function addRecent(absPath) {
   const resolved = path.resolve(absPath);
   const key = resolved.toLowerCase();
   settings.recent = [
     {
-      type,
       path: resolved,
       name: path.basename(resolved) || resolved,
       at: Date.now()
@@ -321,19 +458,22 @@ function allowExternal(absPath) {
 }
 
 function isAllowedPath(absPath) {
-  if (state.workspaceRoot && files.isInside(state.workspaceRoot, absPath)) return true;
+  if (findLibraryForPath(absPath)) return true;
   return state.allowedExternal.has(path.resolve(absPath).toLowerCase());
 }
 
-function resolveDocPath(payload) {
+function resolveDocTarget(payload) {
   if (payload && typeof payload.relPath === 'string') {
-    if (!state.workspaceRoot) throw new Error('尚未打开文件夹');
-    return files.resolveInside(state.workspaceRoot, payload.relPath);
+    const root = payload.library ? path.resolve(payload.library) : state.workspaceRoot;
+    const lib = root ? findLibrary(root) : null;
+    if (!lib) throw new Error('知识库未注册');
+    return { abs: files.resolveInside(lib.path, payload.relPath), root: lib.path };
   }
   if (payload && typeof payload.path === 'string' && payload.path) {
     const abs = path.resolve(payload.path);
     if (!isAllowedPath(abs)) throw new Error('无权访问该文件');
-    return abs;
+    const lib = findLibraryForPath(abs);
+    return { abs, root: lib ? lib.path : null };
   }
   throw new Error('缺少文件路径');
 }
@@ -342,29 +482,64 @@ function listOptions() {
   return { ignore: settings.ignoreDirs };
 }
 
-async function setWorkspace(rootPath) {
-  const abs = path.resolve(rootPath);
+async function setActiveLibrary(absPath) {
+  const lib = findLibrary(absPath);
+  if (!lib) throw new Error('知识库不存在');
+  const stat = await fsp.stat(lib.path);
+  if (!stat.isDirectory()) throw new Error('知识库文件夹不存在或被移动');
+  state.workspaceRoot = lib.path;
+  settings.activeLibrary = lib.path;
+  lib.lastOpenedAt = Date.now();
+  const workspace = await files.listWorkspace(lib.path, listOptions());
+  lib.docCount = workspace.fileCount;
+  persistSettings();
+  return workspace;
+}
+
+async function addOrOpenLibrary(absPath) {
+  const abs = path.resolve(absPath);
   const stat = await fsp.stat(abs);
   if (!stat.isDirectory()) throw new Error('目标不是文件夹');
-  state.workspaceRoot = abs;
-  settings.lastWorkspace = abs;
-  if (settings.lastFile && !files.isInside(abs, settings.lastFile)) {
-    settings.lastFile = null;
+  let lib = findLibrary(abs);
+  if (!lib) {
+    for (const other of settings.libraries) {
+      if (files.isInside(other.path, abs)) {
+        throw new Error(`该文件夹已包含在知识库「${other.name}」中`);
+      }
+      if (files.isInside(abs, other.path)) {
+        throw new Error(`该文件夹包含已有知识库「${other.name}」，请选择更具体的文件夹`);
+      }
+    }
+    if (settings.libraries.length >= 50) throw new Error('知识库数量已达上限（50 个）');
+    lib = {
+      path: abs,
+      name: path.basename(abs) || abs,
+      addedAt: Date.now(),
+      lastOpenedAt: 0,
+      docCount: 0
+    };
+    settings.libraries.push(lib);
   }
-  addRecent('folder', abs);
-  persistSettings();
-  return files.listWorkspace(abs, listOptions());
+  const workspace = await setActiveLibrary(lib.path);
+  return { workspace, libraries: await describeLibraries() };
 }
 
 async function openExternalFile(absPath) {
   const abs = path.resolve(absPath);
   if (!files.isMarkdownPath(abs)) throw new Error('只能打开 Markdown 或文本文件');
+  const lib = findLibraryForPath(abs);
+  if (lib && !samePath(state.workspaceRoot, lib.path)) {
+    state.workspaceRoot = lib.path;
+    settings.activeLibrary = lib.path;
+    lib.lastOpenedAt = Date.now();
+  }
   allowExternal(abs);
   settings.lastFile = abs;
-  addRecent('file', abs);
+  addRecent(abs);
   persistSettings();
   const doc = await files.readDoc(abs);
-  doc.relPath = files.toRelPath(state.workspaceRoot, abs);
+  doc.library = lib ? lib.path : null;
+  doc.relPath = lib ? files.toRelPath(lib.path, abs) : null;
   return doc;
 }
 
@@ -372,16 +547,15 @@ async function applyPath(target) {
   const abs = path.resolve(target);
   const stat = await fsp.stat(abs);
   if (stat.isDirectory()) {
-    const workspace = await setWorkspace(abs);
-    return { workspace, file: null };
+    const opened = await addOrOpenLibrary(abs);
+    return { libraries: opened.libraries, workspace: opened.workspace, file: null };
   }
   if (!stat.isFile()) throw new Error('只能打开文件或文件夹');
   if (!files.isMarkdownPath(abs)) throw new Error('只能打开 .md / .markdown / .mdown / .txt 文件');
-  if (!state.workspaceRoot) {
-    await setWorkspace(path.dirname(abs));
-  }
+  if (!findLibraryForPath(abs)) allowExternal(abs);
   const file = await openExternalFile(abs);
-  return { file, workspace: await files.listWorkspace(state.workspaceRoot, listOptions()) };
+  const workspace = state.workspaceRoot ? await files.listWorkspace(state.workspaceRoot, listOptions()) : null;
+  return { libraries: await describeLibraries(), workspace, file };
 }
 
 function cliTargets(argv) {
@@ -393,10 +567,16 @@ function cliTargets(argv) {
 async function initializeState() {
   if (TEST) {
     const harness = require('../scripts/smoke-harness');
-    testRoot = await harness.prepare();
+    const prepared = await harness.prepare();
+    testRoot = prepared.root;
+    secondRoot = prepared.secondRoot;
     state.workspaceRoot = testRoot;
     settings = defaultSettings();
-    settings.lastWorkspace = testRoot;
+    settings.libraries = [
+      { path: prepared.root, name: '测试库', addedAt: 1, lastOpenedAt: 2, docCount: 0 },
+      { path: prepared.secondRoot, name: '第二库', addedAt: 1, lastOpenedAt: 1, docCount: 0 }
+    ];
+    settings.activeLibrary = prepared.root;
     return;
   }
 
@@ -410,35 +590,38 @@ async function initializeState() {
     }
   }
 
-  if (settings.lastWorkspace) {
-    try {
-      const stat = await fsp.stat(settings.lastWorkspace);
-      if (stat.isDirectory()) {
-        state.workspaceRoot = path.resolve(settings.lastWorkspace);
-      } else {
-        settings.lastWorkspace = null;
-      }
-    } catch {
-      settings.lastWorkspace = null;
-    }
-  }
-
+  let lastFileLibrary = null;
   if (settings.lastFile) {
     try {
-      const stat = await fsp.stat(settings.lastFile);
-      if (!stat.isFile() || !files.isMarkdownPath(settings.lastFile)) {
+      const abs = path.resolve(settings.lastFile);
+      const stat = await fsp.stat(abs);
+      if (!stat.isFile() || !files.isMarkdownPath(abs)) {
         settings.lastFile = null;
       } else {
-        allowExternal(settings.lastFile);
-        if (!state.workspaceRoot) {
-          state.workspaceRoot = path.dirname(path.resolve(settings.lastFile));
-          settings.lastWorkspace = state.workspaceRoot;
-        }
+        settings.lastFile = abs;
+        allowExternal(abs);
+        lastFileLibrary = findLibraryForPath(abs);
       }
     } catch {
       settings.lastFile = null;
     }
   }
+
+  const existing = [];
+  for (const lib of settings.libraries) {
+    try {
+      if ((await fsp.stat(lib.path)).isDirectory()) existing.push(lib);
+    } catch {
+      // 保留注册项，首页显示路径不可用。
+    }
+  }
+  let active = lastFileLibrary;
+  if (!active && settings.activeLibrary) {
+    active = existing.find((lib) => samePath(lib.path, settings.activeLibrary)) || null;
+  }
+  if (!active) active = existing[0] || null;
+  settings.activeLibrary = active ? active.path : null;
+  state.workspaceRoot = active ? active.path : null;
   persistSettings();
 }
 
@@ -448,10 +631,12 @@ async function bootstrapSnapshot() {
   if (state.workspaceRoot) {
     try {
       workspace = await files.listWorkspace(state.workspaceRoot, listOptions());
+      const lib = findLibrary(state.workspaceRoot);
+      if (lib) lib.docCount = workspace.fileCount;
     } catch (error) {
       log('error', 'workspace', `读取文件夹失败：${error.stack || error}`);
       state.workspaceRoot = null;
-      settings.lastWorkspace = null;
+      settings.activeLibrary = null;
     }
   }
   if (settings.lastFile) {
@@ -459,7 +644,9 @@ async function bootstrapSnapshot() {
       const abs = path.resolve(settings.lastFile);
       allowExternal(abs);
       file = await files.readDoc(abs);
-      file.relPath = files.toRelPath(state.workspaceRoot, abs);
+      const lib = findLibraryForPath(abs);
+      file.library = lib ? lib.path : null;
+      file.relPath = lib ? files.toRelPath(lib.path, abs) : null;
     } catch (error) {
       log('warn', 'last-file', `恢复上次文件失败：${error.stack || error}`);
       settings.lastFile = null;
@@ -472,9 +659,11 @@ async function bootstrapSnapshot() {
     if (entry.path) allowExternal(entry.path);
   }
   return {
+    libraries: await describeLibraries(),
     workspace,
     file,
     recent: settings.recent,
+    starred: await publicStarred(),
     settings: publicSettings(),
     recovery: usableRecovery,
     portable: portableMode,
@@ -487,22 +676,23 @@ async function bootstrapSnapshot() {
 async function filterRecovery(entries) {
   const usable = [];
   for (const entry of entries) {
+    const library = entry.path ? (findLibraryForPath(entry.path) || {}).path || null : null;
     if (!entry.path) {
-      usable.push(entry);
+      usable.push({ ...entry, library });
       continue;
     }
     try {
       const stat = await fsp.stat(entry.path);
       if (!stat.isFile()) {
-        usable.push(entry);
+        usable.push({ ...entry, library });
         continue;
       }
       if (entry.timestamp && stat.mtimeMs > entry.timestamp + 1000) continue;
       const doc = await files.readDoc(entry.path);
       if (doc.content === entry.content) continue;
-      usable.push(entry);
+      usable.push({ ...entry, library });
     } catch {
-      usable.push(entry);
+      usable.push({ ...entry, library });
     }
   }
   return usable;
@@ -562,9 +752,10 @@ function showShortcuts() {
       'Ctrl+B        粗体',
       'Ctrl+I        斜体',
       'Ctrl+K        插入链接',
-      'Ctrl+E        切换预览',
+      'Ctrl+E        切换阅读视图',
       'Ctrl+Shift+B  切换侧边栏',
-      'Ctrl+Shift+F  搜索',
+      'Ctrl+Shift+F  搜索全部知识库',
+      'Ctrl+Shift+O  添加知识库',
       'Ctrl+P        打印'
     ].join('\n')
   });
@@ -593,8 +784,8 @@ function createMenu() {
       label: '文件',
       submenu: [
         { label: '新建笔记', accelerator: 'Ctrl+N', click: () => sendMenuAction('new-note') },
+        { label: '添加知识库…', accelerator: 'Ctrl+Shift+O', click: () => sendMenuAction('add-library') },
         { label: '打开文件…', accelerator: 'Ctrl+O', click: () => sendMenuAction('open-file') },
-        { label: '打开文件夹…', accelerator: 'Ctrl+Shift+O', click: () => sendMenuAction('open-folder') },
         { type: 'separator' },
         { label: '保存', accelerator: 'Ctrl+S', click: () => sendMenuAction('save') },
         { label: '另存为…', accelerator: 'Ctrl+Shift+S', click: () => sendMenuAction('save-as') },
@@ -619,15 +810,17 @@ function createMenu() {
         { role: 'selectAll', label: '全选' },
         { type: 'separator' },
         { label: '查找与替换', accelerator: 'Ctrl+F', click: () => sendMenuAction('find') },
-        { label: '搜索文件内容', accelerator: 'Ctrl+Shift+F', click: () => sendMenuAction('focus-search') }
+        { label: '搜索全部知识库', accelerator: 'Ctrl+Shift+F', click: () => sendMenuAction('focus-search') }
       ]
     },
     {
       label: '视图',
       submenu: [
+        { label: '工作台', click: () => sendMenuAction('home') },
+        { type: 'separator' },
         { label: '切换侧边栏', accelerator: 'Ctrl+Shift+B', click: () => sendMenuAction('toggle-sidebar') },
-        { label: '切换预览', accelerator: 'Ctrl+E', click: () => sendMenuAction('toggle-preview') },
-        { label: '切换大纲', click: () => sendMenuAction('toggle-outline') },
+        { label: '切换阅读视图', accelerator: 'Ctrl+E', click: () => sendMenuAction('toggle-reading') },
+        { label: '切换文档信息栏', click: () => sendMenuAction('toggle-outline') },
         { type: 'separator' },
         { role: 'resetZoom', label: '实际大小' },
         { role: 'zoomIn', label: '放大' },
@@ -838,6 +1031,126 @@ async function saveImageToAssets(root, docAbs, buffer, name, mime) {
   };
 }
 
+function requireLibrary(value) {
+  const raw = typeof value === 'string' ? value : (value && value.library);
+  if (!raw) throw new Error('缺少知识库路径');
+  const lib = findLibrary(raw);
+  if (!lib) throw new Error('知识库不存在');
+  return lib;
+}
+
+async function ensureCatalog(lib) {
+  const cached = catalog.snapshot(lib.path);
+  if (cached) return cached;
+  const workspace = await files.listWorkspace(lib.path, listOptions());
+  return catalog.build(lib.path, workspace.tree);
+}
+
+async function homeSnapshot() {
+  return {
+    libraries: await describeLibraries(),
+    recent: settings.recent,
+    starred: await publicStarred()
+  };
+}
+
+async function removeLibrary(libPath) {
+  const lib = findLibrary(libPath);
+  if (!lib) throw new Error('知识库不存在');
+  const abs = lib.path;
+  if (settings.lastFile && files.isInside(abs, settings.lastFile)) settings.lastFile = null;
+  settings.libraries = settings.libraries.filter((item) => !samePath(item.path, abs));
+  settings.starred = settings.starred.filter((star) => !samePath(star.library, abs));
+  catalog.clear(abs);
+  if (settings.activeLibrary && samePath(settings.activeLibrary, abs)) {
+    const candidates = settings.libraries
+      .slice()
+      .sort((a, b) => (b.lastOpenedAt || 0) - (a.lastOpenedAt || 0));
+    let next = null;
+    for (const candidate of candidates) {
+      try {
+        if ((await fsp.stat(candidate.path)).isDirectory()) {
+          next = candidate;
+          break;
+        }
+      } catch {
+        // 跳过不可用目录。
+      }
+    }
+    settings.activeLibrary = next ? next.path : null;
+    state.workspaceRoot = next ? next.path : null;
+    if (next) {
+      next.lastOpenedAt = Date.now();
+      const workspace = await files.listWorkspace(next.path, listOptions());
+      next.docCount = workspace.fileCount;
+      persistSettings();
+      return { libraries: await describeLibraries(), workspace };
+    }
+  }
+  persistSettings();
+  return {
+    libraries: await describeLibraries(),
+    workspace: state.workspaceRoot ? await files.listWorkspace(state.workspaceRoot, listOptions()) : null
+  };
+}
+
+async function renameLibrary(payload) {
+  const lib = findLibrary(payload && payload.library);
+  if (!lib) throw new Error('知识库不存在');
+  const name = String((payload && payload.name) || '').trim();
+  if (!name || name.length > 80 || /[\r\n\0]/.test(name)) throw new Error('知识库名称需为 1–80 个字符');
+  lib.name = name;
+  persistSettings();
+  return { libraries: await describeLibraries() };
+}
+
+async function toggleStar(payload) {
+  const lib = requireLibrary(payload);
+  const abs = files.resolveInside(lib.path, payload && payload.relPath);
+  const stat = await fsp.stat(abs);
+  if (!stat.isFile()) throw new Error('文件不存在，无法收藏');
+  const relPath = files.toRelPath(lib.path, abs);
+  const index = settings.starred.findIndex((star) => samePath(star.library, lib.path) && star.relPath === relPath);
+  if (index >= 0) settings.starred.splice(index, 1);
+  else settings.starred.unshift({ library: lib.path, relPath, at: Date.now() });
+  if (settings.starred.length > 200) settings.starred.length = 200;
+  persistSettings();
+  return { starred: await publicStarred() };
+}
+
+async function searchAll(payload) {
+  const query = String((payload && payload.query) || '').trim();
+  if (!query) return { results: [], truncated: false, filesScanned: 0 };
+  if (query.length > 100) throw new Error('搜索内容过长');
+  if (settings.libraries.length === 0) throw new Error('请先添加知识库');
+  const scope = payload && payload.library ? [requireLibrary(payload.library)] : settings.libraries;
+  const results = [];
+  let truncated = false;
+  let filesScanned = 0;
+  const settled = await Promise.all(scope.map(async (lib) => {
+    try {
+      const data = await files.searchWorkspace(lib.path, query, { ...listOptions(), limit: 40 });
+      return { lib, data };
+    } catch (error) {
+      log('warn', 'search', `搜索 ${lib.path} 失败：${error.stack || error}`);
+      return null;
+    }
+  }));
+  for (const item of settled) {
+    if (!item) continue;
+    filesScanned += item.data.filesScanned || 0;
+    if (item.data.truncated) truncated = true;
+    for (const hit of item.data.results) {
+      if (results.length >= 300) {
+        truncated = true;
+        break;
+      }
+      results.push({ ...hit, library: item.lib.path, libraryName: item.lib.name });
+    }
+  }
+  return { results, truncated, filesScanned };
+}
+
 function registerIpc() {
   const handle = (channel, fn) => {
     ipcMain.handle(channel, async (event, payload) => {
@@ -851,6 +1164,7 @@ function registerIpc() {
   };
 
   handle('app:bootstrap', bootstrapSnapshot);
+  handle('app:home', homeSnapshot);
   handle('app:recent', () => settings.recent);
   handle('recent:remove', (target) => {
     if (typeof target !== 'string' || !target) throw new Error('无效的最近记录');
@@ -865,19 +1179,62 @@ function registerIpc() {
     return settings.recent;
   });
 
-  handle('workspace:choose', async () => {
+  handle('library:add', async () => {
     const result = await dialog.showOpenDialog(win, {
-      title: '打开文件夹',
+      title: '添加知识库',
       properties: ['openDirectory', 'createDirectory']
     });
     if (result.canceled || result.filePaths.length === 0) return null;
-    const workspace = await setWorkspace(result.filePaths[0]);
-    return { workspace, recent: settings.recent };
+    const opened = await addOrOpenLibrary(result.filePaths[0]);
+    return { libraries: opened.libraries, workspace: opened.workspace };
   });
+
+  handle('library:open', async (payload) => {
+    const lib = requireLibrary(payload);
+    const workspace = await setActiveLibrary(lib.path);
+    return { libraries: await describeLibraries(), workspace };
+  });
+
+  handle('library:remove', async (payload) => removeLibrary(payload && payload.library));
+
+  handle('library:rename', async (payload) => renameLibrary(payload));
+
+  handle('catalog:get', async (payload) => {
+    const lib = requireLibrary(payload);
+    let snapshot = payload && payload.refresh ? null : catalog.snapshot(lib.path);
+    if (!snapshot) {
+      const workspace = await files.listWorkspace(lib.path, listOptions());
+      snapshot = await catalog.build(lib.path, workspace.tree);
+    }
+    return { library: lib.path, ...snapshot };
+  });
+
+  handle('catalog:backlinks', async (payload) => {
+    const lib = requireLibrary(payload);
+    await ensureCatalog(lib);
+    return { backlinks: catalog.backlinks(lib.path, payload && payload.relPath) };
+  });
+
+  handle('wiki:resolve', async (payload) => {
+    const lib = requireLibrary(payload);
+    await ensureCatalog(lib);
+    const doc = catalog.resolve(lib.path, payload && payload.target);
+    return doc ? { relPath: doc.relPath, title: doc.title } : null;
+  });
+
+  handle('star:toggle', async (payload) => toggleStar(payload));
+
+  handle('search:all', async (payload) => searchAll(payload));
 
   handle('workspace:refresh', async () => {
     if (!state.workspaceRoot) return null;
-    return files.listWorkspace(state.workspaceRoot, listOptions());
+    const workspace = await files.listWorkspace(state.workspaceRoot, listOptions());
+    const lib = findLibrary(state.workspaceRoot);
+    if (lib) {
+      lib.docCount = workspace.fileCount;
+      persistSettings();
+    }
+    return { workspace };
   });
 
   handle('file:choose', async () => {
@@ -900,11 +1257,13 @@ function registerIpc() {
   });
 
   handle('file:read', async (payload) => {
-    const abs = resolveDocPath(payload);
+    const target = resolveDocTarget(payload);
+    const abs = target.abs;
     allowExternal(abs);
     const doc = await files.readDoc(abs);
-    doc.relPath = files.toRelPath(state.workspaceRoot, abs);
-    addRecent('file', abs);
+    doc.library = target.root;
+    doc.relPath = target.root ? files.toRelPath(target.root, abs) : null;
+    addRecent(abs);
     settings.lastFile = abs;
     persistSettings();
     return doc;
@@ -912,7 +1271,8 @@ function registerIpc() {
 
   handle('file:save', async (payload) => {
     if (!payload || typeof payload.content !== 'string') throw new Error('缺少要保存的内容');
-    const abs = resolveDocPath(payload);
+    const target = resolveDocTarget(payload);
+    const abs = target.abs;
     const result = await files.writeDoc(abs, {
       content: payload.content,
       eol: payload.eol,
@@ -927,17 +1287,25 @@ function registerIpc() {
         }
       }
     });
+    const relPath = target.root ? files.toRelPath(target.root, abs) : null;
     if (!result.conflict && !result.missing) {
       allowExternal(abs);
       if (settings.lastFile !== abs) {
         settings.lastFile = abs;
         persistSettings();
       }
+      if (target.root) {
+        catalog.upsert(target.root, relPath, payload.content, {
+          mtimeMs: result.mtimeMs,
+          size: result.size
+        });
+      }
     }
     return {
       ...result,
       path: abs,
-      relPath: files.toRelPath(state.workspaceRoot, abs)
+      library: target.root,
+      relPath
     };
   });
 
@@ -972,64 +1340,116 @@ function registerIpc() {
       force: true
     });
     const abs = path.resolve(target);
+    const lib = findLibraryForPath(abs);
+    const relPath = lib ? files.toRelPath(lib.path, abs) : null;
     allowExternal(abs);
     settings.lastFile = abs;
-    addRecent('file', abs);
+    addRecent(abs);
     persistSettings();
+    if (lib) {
+      catalog.upsert(lib.path, relPath, payload.content, {
+        mtimeMs: writeResult.mtimeMs,
+        size: writeResult.size
+      });
+    }
     const doc = await files.readDoc(abs);
     return {
       ...doc,
-      relPath: files.toRelPath(state.workspaceRoot, abs),
+      library: lib ? lib.path : null,
+      relPath,
       mtimeMs: writeResult.mtimeMs
     };
   });
 
   handle('entry:create', async (payload) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
+    if (!state.workspaceRoot) throw new Error('请先添加知识库');
+    const root = state.workspaceRoot;
     const created = await files.createEntry(
-      state.workspaceRoot,
+      root,
       payload && payload.parentRel,
       payload && payload.name,
       payload && payload.type === 'dir' ? 'dir' : 'file'
     );
-    const workspace = await files.listWorkspace(state.workspaceRoot, listOptions());
+    if (created.type === 'file') {
+      try {
+        const abs = files.resolveInside(root, created.relPath);
+        const stat = await fsp.stat(abs);
+        catalog.upsert(root, created.relPath, '', { mtimeMs: stat.mtimeMs, size: stat.size });
+      } catch (error) {
+        log('warn', 'catalog', `索引新文件失败：${error.stack || error}`);
+      }
+    }
+    const workspace = await files.listWorkspace(root, listOptions());
+    const lib = findLibrary(root);
+    if (lib) {
+      lib.docCount = workspace.fileCount;
+      persistSettings();
+    }
     return { entry: created, workspace };
   });
 
   handle('entry:rename', async (payload) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
-    const result = await files.renameEntry(state.workspaceRoot, payload && payload.relPath, payload && payload.name);
+    if (!state.workspaceRoot) throw new Error('请先添加知识库');
+    const root = state.workspaceRoot;
+    const result = await files.renameEntry(root, payload && payload.relPath, payload && payload.name);
+    catalog.rename(root, result.oldRelPath, result.newRelPath);
+    const oldAbs = files.resolveInside(root, result.oldRelPath);
+    const newAbs = files.resolveInside(root, result.newRelPath);
+    settings.starred = settings.starred.map((star) => {
+      if (!samePath(star.library, root)) return star;
+      if (star.relPath === result.oldRelPath) return { ...star, relPath: result.newRelPath };
+      if (star.relPath.startsWith(`${result.oldRelPath}/`)) {
+        return { ...star, relPath: `${result.newRelPath}${star.relPath.slice(result.oldRelPath.length)}` };
+      }
+      return star;
+    });
+    settings.recent = settings.recent.map((item) => {
+      if (!files.isInside(oldAbs, item.path)) return item;
+      const suffix = path.relative(oldAbs, item.path);
+      const nextPath = path.resolve(newAbs, suffix);
+      return { ...item, path: nextPath, name: path.basename(nextPath) || nextPath };
+    });
     if (settings.lastFile) {
-      const rel = files.toRelPath(state.workspaceRoot, settings.lastFile);
+      const rel = files.toRelPath(root, settings.lastFile);
       if (rel === result.oldRelPath || (rel && rel.startsWith(`${result.oldRelPath}/`))) {
-        const oldAbs = files.resolveInside(state.workspaceRoot, result.oldRelPath);
-        const newAbs = files.resolveInside(state.workspaceRoot, result.newRelPath);
         const suffix = path.relative(oldAbs, settings.lastFile);
         settings.lastFile = path.resolve(newAbs, suffix);
-        persistSettings();
       }
     }
-    const workspace = await files.listWorkspace(state.workspaceRoot, listOptions());
+    persistSettings();
+    const workspace = await files.listWorkspace(root, listOptions());
     return { ...result, workspace };
   });
 
   handle('entry:delete', async (payload) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
+    if (!state.workspaceRoot) throw new Error('请先添加知识库');
+    const root = state.workspaceRoot;
     const relPath = payload && payload.relPath;
-    const targetAbs = files.resolveInside(state.workspaceRoot, relPath);
-    await files.deleteEntry(state.workspaceRoot, relPath);
-    if (settings.lastFile && files.isInside(targetAbs, settings.lastFile)) {
-      settings.lastFile = null;
+    const targetAbs = files.resolveInside(root, relPath);
+    await files.deleteEntry(root, relPath);
+    catalog.remove(root, relPath);
+    settings.starred = settings.starred.filter((star) => {
+      if (!samePath(star.library, root)) return true;
+      return star.relPath !== relPath && !star.relPath.startsWith(`${relPath}/`);
+    });
+    settings.recent = settings.recent.filter((item) => !files.isInside(targetAbs, item.path));
+    if (settings.lastFile && files.isInside(targetAbs, settings.lastFile)) settings.lastFile = null;
+    persistSettings();
+    const workspace = await files.listWorkspace(root, listOptions());
+    const lib = findLibrary(root);
+    if (lib) {
+      lib.docCount = workspace.fileCount;
       persistSettings();
     }
-    const workspace = await files.listWorkspace(state.workspaceRoot, listOptions());
     return { relPath, workspace };
   });
 
   handle('entry:reveal', async (payload) => {
     let abs;
     if (payload && typeof payload.relPath === 'string') {
-      abs = files.resolveInside(state.workspaceRoot, payload.relPath);
+      const root = payload.library ? requireLibrary(payload.library).path : state.workspaceRoot;
+      if (!root) throw new Error('请先添加知识库');
+      abs = files.resolveInside(root, payload.relPath);
     } else if (payload && typeof payload.path === 'string') {
       abs = path.resolve(payload.path);
       if (!isAllowedPath(abs)) throw new Error('无权访问该文件');
@@ -1038,11 +1458,6 @@ function registerIpc() {
     }
     shell.showItemInFolder(abs);
     return true;
-  });
-
-  handle('search:query', async (query) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
-    return files.searchWorkspace(state.workspaceRoot, query, listOptions());
   });
 
   handle('link:open', async (payload) => {
@@ -1057,12 +1472,15 @@ function registerIpc() {
     }
     if (result.anchor) return { anchor: true };
     if (result.directory) {
-      const workspace = await setWorkspace(result.directory);
-      return { workspace };
+      const lib = findLibraryForPath(result.directory);
+      if (!lib) throw new Error('该文件夹不是已添加的知识库');
+      const workspace = await setActiveLibrary(lib.path);
+      return { libraries: await describeLibraries(), workspace };
     }
     if (result.path) {
       const file = await openExternalFile(result.path);
-      return { file, workspace: state.workspaceRoot ? await files.listWorkspace(state.workspaceRoot, listOptions()) : null };
+      const workspace = state.workspaceRoot ? await files.listWorkspace(state.workspaceRoot, listOptions()) : null;
+      return { libraries: await describeLibraries(), workspace, file };
     }
     throw new Error('无法打开该链接');
   });
@@ -1089,23 +1507,30 @@ function registerIpc() {
   handle('logs:clear', () => clearLogs());
 
   handle('backups:list', async (payload) => {
-    const abs = resolveDocPath(payload);
+    const abs = resolveDocTarget(payload).abs;
     return backups.listBackups(backupsDir, abs);
   });
   handle('backups:create', async (payload) => {
-    const abs = resolveDocPath(payload);
+    const abs = resolveDocTarget(payload).abs;
     const item = await backups.createBackup(backupsDir, abs, { force: true });
     return { item, list: await backups.listBackups(backupsDir, abs) };
   });
   handle('backups:read', async (payload) => {
-    const abs = resolveDocPath(payload);
+    const abs = resolveDocTarget(payload).abs;
     return backups.readBackup(backupsDir, abs, payload && payload.id);
   });
 
   handle('recovery:save', async (entry) => {
     if (!recoveryStore) return false;
-    if (entry && typeof entry.path === 'string' && entry.path) allowExternal(entry.path);
-    await recoveryStore.save(entry);
+    const prepared = entry && typeof entry === 'object' ? { ...entry } : entry;
+    if (prepared && typeof prepared.path === 'string' && prepared.path) {
+      allowExternal(prepared.path);
+      if (!prepared.library) {
+        const lib = findLibraryForPath(prepared.path);
+        prepared.library = lib ? lib.path : null;
+      }
+    }
+    await recoveryStore.save(prepared);
     return true;
   });
   handle('recovery:clear', async (key) => {
@@ -1120,8 +1545,8 @@ function registerIpc() {
   });
 
   handle('image:pick', async (payload) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
-    const docAbs = resolveDocPath(payload);
+    const target = resolveDocTarget(payload);
+    if (!target.root) throw new Error('请先将文档保存到知识库');
     const result = await dialog.showOpenDialog(win, {
       title: '插入图片',
       properties: ['openFile'],
@@ -1132,15 +1557,15 @@ function registerIpc() {
     const stat = await fsp.stat(chosen);
     if (stat.size > 20 * 1024 * 1024) throw new Error('图片超过 20 MB');
     const buffer = await fsp.readFile(chosen);
-    return saveImageToAssets(state.workspaceRoot, docAbs, buffer, path.basename(chosen), '');
+    return saveImageToAssets(target.root, target.abs, buffer, path.basename(chosen), '');
   });
 
   handle('image:saveBuffer', async (payload) => {
-    if (!state.workspaceRoot) throw new Error('请先打开文件夹');
     if (!payload || !payload.data) throw new Error('缺少图片内容');
-    const docAbs = resolveDocPath(payload);
+    const target = resolveDocTarget(payload);
+    if (!target.root) throw new Error('请先将文档保存到知识库');
     const buffer = Buffer.from(payload.data);
-    return saveImageToAssets(state.workspaceRoot, docAbs, buffer, payload.name, payload.mime);
+    return saveImageToAssets(target.root, target.abs, buffer, payload.name, payload.mime);
   });
 
   handle('edit:action', async (action) => {
@@ -1239,7 +1664,8 @@ if (!gotLock) {
         state,
         settings,
         log,
-        testRoot
+        testRoot,
+        secondRoot
       });
     } else if (SMOKE_BOOT) {
       runSmokeBoot(window);

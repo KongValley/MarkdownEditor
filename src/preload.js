@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   bootstrap: () => ipcRenderer.invoke('app:bootstrap'),
+  getHome: () => ipcRenderer.invoke('app:home'),
   getRecent: () => ipcRenderer.invoke('app:recent'),
   removeRecent: (target) => ipcRenderer.invoke('recent:remove', target),
   clearRecent: () => ipcRenderer.invoke('recent:clear'),
@@ -27,7 +28,15 @@ contextBridge.exposeInMainWorld('api', {
   saveImageBuffer: (payload) => ipcRenderer.invoke('image:saveBuffer', payload),
   editAction: (action) => ipcRenderer.invoke('edit:action', action),
 
-  chooseFolder: () => ipcRenderer.invoke('workspace:choose'),
+  addLibrary: () => ipcRenderer.invoke('library:add'),
+  openLibrary: (library) => ipcRenderer.invoke('library:open', { library }),
+  removeLibrary: (library) => ipcRenderer.invoke('library:remove', { library }),
+  renameLibrary: (payload) => ipcRenderer.invoke('library:rename', payload),
+  getCatalog: (payload) => ipcRenderer.invoke('catalog:get', payload),
+  getBacklinks: (payload) => ipcRenderer.invoke('catalog:backlinks', payload),
+  resolveWiki: (payload) => ipcRenderer.invoke('wiki:resolve', payload),
+  toggleStar: (payload) => ipcRenderer.invoke('star:toggle', payload),
+
   refreshWorkspace: () => ipcRenderer.invoke('workspace:refresh'),
 
   chooseFile: () => ipcRenderer.invoke('file:choose'),
@@ -41,7 +50,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteEntry: (payload) => ipcRenderer.invoke('entry:delete', payload),
   reveal: (payload) => ipcRenderer.invoke('entry:reveal', payload),
 
-  search: (query) => ipcRenderer.invoke('search:query', query),
+  search: (payload) => ipcRenderer.invoke('search:all', payload),
   openLink: (payload) => ipcRenderer.invoke('link:open', payload),
   openExternal: (url) => ipcRenderer.invoke('external:open', url),
   confirm: (payload) => ipcRenderer.invoke('ui:confirm', payload),

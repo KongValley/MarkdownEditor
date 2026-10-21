@@ -116,10 +116,199 @@
     let text = String(value == null ? '' : value);
     text = text.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1');
     text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+    text = text.replace(/\[\[([^\[\]\n|]+?)(?:\|([^\[\]\n]*?))?\]\]/g, (match, target, label) => {
+      const shown = String(label == null ? '' : label).trim();
+      return shown || String(target == null ? '' : target).trim();
+    });
     text = text.replace(/`([^`]*)`/g, '$1');
     text = text.replace(/[*_~]{1,3}([^*_~]+)[*_~]{1,3}/g, '$1');
     text = text.replace(/\\([\\`*_{}\[\]()#+.!>-])/g, '$1');
     return text;
+  }
+
+  function cleanTag(value) {
+    let tag = String(value == null ? '' : value).trim();
+    const quoted = tag.match(/^(['"])(.*)\1$/);
+    if (quoted) tag = quoted[2];
+    tag = tag.replace(/^#+/, '').trim();
+    return tag.slice(0, 40);
+  }
+
+  function addTag(tags, value) {
+    if (tags.length >= 20) return;
+    const tag = cleanTag(value);
+    if (!tag) return;
+    const key = tag.toLowerCase();
+    if (tags.some((item) => item.toLowerCase() === key)) return;
+    tags.push(tag);
+  }
+
+  function addInlineTags(tags, value) {
+    let body = String(value == null ? '' : value).trim();
+    if (!body || body === '[]') return;
+    const quoted = body.match(/^(['"])(.*)\1$/);
+    if (quoted) body = quoted[2];
+    if (body.startsWith('[') && body.endsWith(']')) body = body.slice(1, -1);
+    const parts = body.split(/[,，]/);
+    for (const part of parts) addTag(tags, part);
+  }
+
+  function parseFrontmatter(text) {
+    const source = String(text == null ? '' : text).replace(/^\uFEFF/, '');
+    const empty = { tags: [], title: '', body: source, bodyStart: 0, hasFrontmatter: false };
+    const firstEnd = source.indexOf('\n');
+    if (firstEnd < 0) return empty;
+    const firstLine = source.slice(0, firstEnd).replace(/\r$/, '');
+    if (!/^---[ \t]*$/.test(firstLine)) return empty;
+    const lines = [];
+    let cursor = firstEnd + 1;
+    let closeStart = -1;
+    let closeEnd = -1;
+    for (let count = 0; count < 300 && cursor <= source.length; count += 1) {
+      let end = source.indexOf('\n', cursor);
+      if (end < 0) end = source.length;
+      const line = source.slice(cursor, end).replace(/\r$/, '');
+      if (/^---[ \t]*$/.test(line)) {
+        closeStart = cursor;
+        closeEnd = end;
+        break;
+      }
+      lines.push(line);
+      if (end >= source.length) break;
+      cursor = end + 1;
+    }
+    if (closeStart < 0) return empty;
+    if (!lines.some((line) => /^[A-Za-z][\w-]*\s*:/.test(line))) return empty;
+    const bodyStart = closeEnd < source.length ? closeEnd + 1 : source.length;
+    const tags = [];
+    let title = '';
+    let listMode = false;
+    for (const line of lines) {
+      const match = line.match(/^([A-Za-z][\w-]*)\s*:\s?(.*)$/);
+      if (match) {
+        listMode = false;
+        const key = match[1].toLowerCase();
+        const value = match[2];
+        if (key === 'title') {
+          const quoted = value.trim().match(/^(['"])(.*)\1$/);
+          title = (quoted ? quoted[2] : value).trim();
+        } else if (key === 'tags') {
+          if (value.trim()) addInlineTags(tags, value);
+          else listMode = true;
+        }
+        continue;
+      }
+      if (!listMode) continue;
+      const item = line.match(/^\s*-\s*(.+)$/);
+      if (item) addTag(tags, item[1]);
+      else if (line.trim()) listMode = false;
+    }
+    return { tags, title, body: source.slice(bodyStart), bodyStart, hasFrontmatter: true };
+  }
+
+  function stripFrontmatter(text) {
+    return parseFrontmatter(text).body;
+  }
+
+  function extractWikiLinks(text) {
+    const lines = String(text == null ? '' : text).split('\n');
+    const result = [];
+    const seen = new Set();
+    let fence = false;
+    for (const rawLine of lines) {
+      if (/^\s*(```+|~~~+)/.test(rawLine)) {
+        fence = !fence;
+        continue;
+      }
+      if (fence) continue;
+      const line = rawLine.replace(/`[^`]*`/g, '');
+      const expression = /\[\[([^\[\]\n|]+?)(?:\|([^\[\]\n]*?))?\]\]/g;
+      let match;
+      while ((match = expression.exec(line)) !== null) {
+        const target = match[1].trim();
+        if (!target) continue;
+        const key = target.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(target);
+      }
+    }
+    return result;
+  }
+
+  function documentTitle(text, fallback) {
+    const parsed = parseFrontmatter(text);
+    if (parsed.title) return parsed.title;
+    const headings = extractHeadings(parsed.body);
+    const chosen = headings.find((heading) => heading.level === 1) || headings[0];
+    if (chosen && chosen.text.trim()) return chosen.text.trim();
+    return String(fallback == null ? '' : fallback).trim();
+  }
+
+  function normalizeLinkKey(value) {
+    return String(value == null ? '' : value)
+      .trim()
+      .replace(/\\/g, '/')
+      .replace(/^\.\//, '')
+      .replace(/\.(md|markdown|mdown|txt)$/i, '')
+      .toLowerCase();
+  }
+
+  function docLinkKeys(doc) {
+    const relPath = String(doc && doc.relPath ? doc.relPath : '');
+    const name = String(doc && doc.name ? doc.name : relPath.split('/').pop() || '');
+    const title = String(doc && doc.title ? doc.title : '').trim().toLowerCase();
+    return { rel: normalizeLinkKey(relPath), name: normalizeLinkKey(name), title };
+  }
+
+  function linkMatchesDoc(target, doc) {
+    if (!doc) return false;
+    const needle = normalizeLinkKey(target);
+    if (!needle) return false;
+    const keys = docLinkKeys(doc);
+    return keys.rel === needle || keys.name === needle || keys.title === needle;
+  }
+
+  function resolveWikilink(target, documents) {
+    const needle = normalizeLinkKey(target);
+    if (!needle || !Array.isArray(documents)) return null;
+    let best = null;
+    let bestRank = 99;
+    for (const doc of documents) {
+      if (!doc || typeof doc.relPath !== 'string') continue;
+      const keys = docLinkKeys(doc);
+      let rank = -1;
+      if (keys.rel && keys.rel === needle) rank = 0;
+      else if (keys.name && keys.name === needle) rank = 1;
+      else if (keys.title && keys.title === needle) rank = 2;
+      if (rank < 0) continue;
+      if (rank < bestRank) {
+        best = doc;
+        bestRank = rank;
+        continue;
+      }
+      if (rank === bestRank) {
+        const rel = String(doc.relPath);
+        const bestRel = String((best && best.relPath) || '');
+        if (rel.length < bestRel.length || (rel.length === bestRel.length && rel < bestRel)) best = doc;
+      }
+    }
+    return best;
+  }
+
+  function findBacklinks(documents, relPath) {
+    if (!Array.isArray(documents)) return [];
+    const active = documents.find((doc) => doc && doc.relPath === relPath);
+    if (!active) return [];
+    const result = [];
+    for (const doc of documents) {
+      if (!doc || doc.relPath === active.relPath || !Array.isArray(doc.links)) continue;
+      if (doc.links.some((link) => linkMatchesDoc(link, active))) {
+        result.push({ relPath: doc.relPath, title: doc.title || doc.name || doc.relPath });
+      }
+    }
+    result.sort((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0));
+    return result;
   }
 
   function extractHeadings(text) {
@@ -311,6 +500,13 @@
     countWords,
     readingMinutes,
     displayWidth,
-    stripInline
+    stripInline,
+    parseFrontmatter,
+    stripFrontmatter,
+    extractWikiLinks,
+    documentTitle,
+    resolveWikilink,
+    linkMatchesDoc,
+    findBacklinks
   };
 }));

@@ -10,7 +10,6 @@ const DEFAULT_SETTINGS = {
   lineWidth: 0,
   autosave: true,
   autosaveDelay: 900,
-  preview: true,
   sidebar: true,
   outline: true,
   split: 0.5,
@@ -18,24 +17,34 @@ const DEFAULT_SETTINGS = {
   syntaxHighlight: true,
   showReadingTime: true,
   wordGoal: 0,
-  ignoreDirs: []
+  ignoreDirs: [],
+  viewMode: 'split',
+  librarySort: 'updated'
 };
 
 const el = {
   app: $('app'),
-  workspaceTitle: $('workspaceTitle'),
+  btnHome: $('btnHome'),
+  topCrumb: $('topCrumb'),
+  searchInput: $('searchInput'),
+  btnClearSearch: $('btnClearSearch'),
   wsName: $('wsName'),
   wsPath: $('wsPath'),
+  libraryList: $('libraryList'),
+  libraryCards: $('libraryCards'),
   tree: $('tree'),
   sidebarEmpty: $('sidebarEmpty'),
+  sidebarEmptyText: $('sidebarEmptyText'),
   sidebarFoot: $('sidebarFoot'),
   outlinePanel: $('outlinePanel'),
   outlineList: $('outlineList'),
   outlineCount: $('outlineCount'),
-  searchInput: $('searchInput'),
-  btnClearSearch: $('btnClearSearch'),
   searchResults: $('searchResults'),
-  welcome: $('welcome'),
+  searchSummary: $('searchSummary'),
+  btnSearchClose: $('btnSearchClose'),
+  homeView: $('homeView'),
+  libraryView: $('libraryView'),
+  searchView: $('searchView'),
   welcomeTitle: $('welcomeTitle'),
   welcomeDesc: $('welcomeDesc'),
   welcomeOpenFolder: $('welcomeOpenFolder'),
@@ -43,7 +52,22 @@ const el = {
   welcomeNewNote: $('welcomeNewNote'),
   recentWrap: $('recentWrap'),
   recentList: $('recentList'),
+  recentEmpty: $('recentEmpty'),
   btnClearRecent: $('btnClearRecent'),
+  starredWrap: $('starredWrap'),
+  starredList: $('starredList'),
+  starredEmpty: $('starredEmpty'),
+  btnAddLibraryCard: $('btnAddLibraryCard'),
+  libTitle: $('libTitle'),
+  libPath: $('libPath'),
+  libSort: $('libSort'),
+  libTruncated: $('libTruncated'),
+  tagFilter: $('tagFilter'),
+  libLoading: $('libLoading'),
+  libEmpty: $('libEmpty'),
+  docList: $('docList'),
+  btnLibNewNote: $('btnLibNewNote'),
+  btnLibRefresh: $('btnLibRefresh'),
   editorWrap: $('editorWrap'),
   editor: $('editor'),
   tabbar: $('tabbar'),
@@ -53,6 +77,14 @@ const el = {
   splitter: $('splitter'),
   docTitle: $('docTitle'),
   docPath: $('docPath'),
+  viewSwitch: $('viewSwitch'),
+  btnStar: $('btnStar'),
+  docRail: $('docRail'),
+  docTagsBlock: $('docTagsBlock'),
+  docTags: $('docTags'),
+  backlinksBlock: $('backlinksBlock'),
+  backlinkCount: $('backlinkCount'),
+  backlinkList: $('backlinkList'),
   conflict: $('conflict'),
   missing: $('missing'),
   recoveredBanner: $('recoveredBanner'),
@@ -85,7 +117,8 @@ const el = {
   statusCursor: $('statusCursor'),
   statusEol: $('statusEol'),
   btnNewNote: $('btnNewNote'),
-  btnOpenFolder: $('btnOpenFolder'),
+  btnNewNoteSidebar: $('btnNewNoteSidebar'),
+  btnAddLibrary: $('btnAddLibrary'),
   btnSave: $('btnSave'),
   btnSaveAs: $('btnSaveAs'),
   btnReveal: $('btnReveal'),
@@ -94,7 +127,6 @@ const el = {
   btnRefresh: $('btnRefresh'),
   btnOpenFolderSidebar: $('btnOpenFolderSidebar'),
   btnToggleSidebar: $('btnToggleSidebar'),
-  btnTogglePreview: $('btnTogglePreview'),
   btnTheme: $('btnTheme'),
   btnSettings: $('btnSettings'),
   btnOverwrite: $('btnOverwrite'),
@@ -110,20 +142,34 @@ const el = {
 
 const state = {
   settings: { ...DEFAULT_SETTINGS },
+  libraries: [],
   workspace: null,
+  view: 'home',
+  viewBeforeSearch: 'home',
   tabs: [],
   activeId: null,
   nextTabId: 1,
   recent: [],
+  starred: [],
+  catalog: { documents: [], tags: [], truncated: false },
+  catalogLoading: false,
+  tagFilter: null,
+  backlinks: [],
+  backlinksKey: '',
   selectedDir: '',
   expanded: new Set(),
   searchToken: 0,
+  searchData: null,
   find: { open: false, query: '', replacement: '', caseSensitive: false, regex: false, ranges: [], index: -1, marks: [] },
   outline: [],
   lastRefresh: 0,
   platform: 'win32',
   testMode: false,
-  recoveryEntries: []
+  recoveryEntries: [],
+  contextToken: 0,
+  catalogToken: 0,
+  backlinkToken: 0,
+  homeToken: 0
 };
 
 let cm = null;
@@ -132,6 +178,8 @@ let markedReady = false;
 let previewTimer = null;
 let autosaveTimer = null;
 let recoveryTimer = null;
+let catalogTimer = null;
+let backlinkTimer = null;
 let saveQueue = Promise.resolve();
 let modalResolve = null;
 let gridDrag = null;
@@ -177,6 +225,45 @@ function relativeToRoot(root, target) {
   const t = normalizeSlashes(target);
   if (t.toLowerCase() === r.toLowerCase()) return '';
   return t.slice(r.length + 1);
+}
+
+function samePath(a, b) {
+  if (!a || !b) return false;
+  return normalizeSlashes(a).replace(/\/+$/, '').toLowerCase() === normalizeSlashes(b).replace(/\/+$/, '').toLowerCase();
+}
+
+function libraryForPath(absPath) {
+  if (!absPath) return null;
+  return state.libraries.find((lib) => isPathInside(lib.path, absPath)) || null;
+}
+
+function libraryName(root) {
+  if (!root) return '';
+  const lib = state.libraries.find((item) => samePath(item.path, root));
+  return lib ? lib.name : '';
+}
+
+function stemName(name) {
+  return String(name || '').replace(/\.[^.]+$/, '');
+}
+
+function formatTime(ms) {
+  const time = Number(ms);
+  if (!Number.isFinite(time) || time <= 0) return '';
+  const date = new Date(time);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) {
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function docPayload(tab) {
+  if (!tab) return {};
+  if (tab.libraryRoot && tab.relPath) return { library: tab.libraryRoot, relPath: tab.relPath };
+  return { path: tab.path };
 }
 
 function escapeHtml(value) {
@@ -250,6 +337,32 @@ function setupMarked() {
     return;
   }
   markedReady = true;
+  if (typeof window.marked.use === 'function') {
+    window.marked.use({
+      extensions: [{
+        name: 'wikilink',
+        level: 'inline',
+        start(src) {
+          return src.indexOf('[[');
+        },
+        tokenizer(src) {
+          const match = /^\[\[([^\[\]\n|]+?)(?:\|([^\[\]\n]*?))?\]\]/.exec(src);
+          if (!match) return undefined;
+          const target = match[1].trim();
+          if (!target) return undefined;
+          return {
+            type: 'wikilink',
+            raw: match[0],
+            target,
+            label: (match[2] || match[1]).trim()
+          };
+        },
+        renderer(token) {
+          return `<a href="#" class="wiki-link" data-wiki-target="${escapeHtml(token.target)}">${escapeHtml(token.label)}</a>`;
+        }
+      }]
+    });
+  }
   renderer = new window.marked.Renderer();
   renderer.html = (html) => escapeHtml(html);
   renderer.code = (code, infostring) => {
@@ -331,7 +444,7 @@ function renderPreview() {
     return;
   }
   try {
-    el.preview.innerHTML = window.marked.parse(tab.text, {
+    el.preview.innerHTML = window.marked.parse(T.stripFrontmatter(tab.text), {
       gfm: true,
       breaks: false,
       headerIds: true,
@@ -352,6 +465,7 @@ function schedulePreview() {
   previewTimer = setTimeout(() => {
     renderPreview();
     renderOutline();
+    renderDocTags();
     if (state.find.open) runFind(true);
   }, 80);
 }
@@ -380,7 +494,8 @@ function updateStatus() {
   }
   el.statusWords.textContent = parts.join(' · ');
   el.statusWords.classList.toggle('goal-met', goal > 0 && words != null && words >= goal);
-  el.statusFile.textContent = tab ? (tab.relPath || tab.path || '') : '';
+  const library = tab ? libraryName(tab.libraryRoot) : '';
+  el.statusFile.textContent = tab ? (library && tab.relPath ? `${library} / ${tab.relPath}` : (tab.relPath || tab.path || '')) : '';
   el.statusFile.title = tab && tab.path ? tab.path : '';
   el.statusEol.textContent = tab ? (tab.eol === 'crlf' ? 'CRLF' : 'LF') : '';
 
@@ -414,11 +529,25 @@ function updateStatus() {
 
 function updateTitle() {
   const tab = activeTab();
-  const name = tab ? tab.name : (state.workspace ? state.workspace.name : 'Markdown 笔记');
   const marker = tab && (tab.dirty || tab.recovered) ? '● ' : '';
-  el.docTitle.textContent = tab ? `${marker}${tab.name}` : '';
-  el.docPath.textContent = tab ? (tab.relPath || tab.path || '') : '';
-  document.title = tab ? `${marker}${name} — Markdown 笔记` : 'Markdown 笔记';
+  let title = tab ? tab.name : '';
+  if (tab) {
+    const fallback = stemName(tab.name);
+    title = tab.text.length > 300000 ? fallback : T.documentTitle(tab.text, fallback);
+    if (!title) title = fallback;
+  }
+  el.docTitle.textContent = tab ? `${marker}${title}` : '';
+  if (tab) {
+    const library = libraryName(tab.libraryRoot);
+    el.docPath.textContent = library && tab.relPath ? `${library} / ${tab.relPath}` : (tab.relPath || tab.path || '');
+  } else {
+    el.docPath.textContent = '';
+  }
+  const workspaceName = state.workspace ? (libraryName(state.workspace.root) || state.workspace.name) : '';
+  el.topCrumb.textContent = tab
+    ? (libraryName(tab.libraryRoot) || workspaceName || '工作台')
+    : (workspaceName || '工作台');
+  document.title = tab ? `${marker}${title} — Markdown 笔记` : (workspaceName ? `${workspaceName} — Markdown 笔记` : 'Markdown 笔记');
 }
 
 function updateBanners() {
@@ -430,92 +559,125 @@ function updateBanners() {
 
 function syncButtons() {
   const tab = activeTab();
-  el.btnNewNote.disabled = !state.workspace;
+  el.btnNewNote.disabled = false;
+  el.btnNewNoteSidebar.disabled = !state.workspace;
   el.btnNewFolder.disabled = !state.workspace;
   el.btnRefresh.disabled = !state.workspace;
+  el.btnLibNewNote.disabled = !state.workspace;
+  el.btnLibRefresh.disabled = !state.workspace;
   el.btnSave.disabled = !tab;
   el.btnSaveAs.disabled = !tab;
   el.btnReveal.disabled = !tab;
   el.btnHistory.disabled = !tab || !tab.path;
-  el.btnTogglePreview.disabled = !tab;
-  el.searchInput.disabled = !state.workspace;
+  el.btnStar.disabled = !tab || !tab.libraryRoot;
+  el.searchInput.disabled = state.libraries.length === 0;
   el.btnToggleSidebar.classList.toggle('active', state.settings.sidebar);
-  el.btnTogglePreview.classList.toggle('active', state.settings.preview);
+  const mode = state.settings.viewMode;
+  el.viewSwitch.querySelectorAll('button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.mode === mode);
+    button.disabled = !tab;
+  });
 }
 
 function updateWorkspaceChrome() {
+  let displayName = '';
   if (state.workspace) {
-    el.workspaceTitle.textContent = state.workspace.root;
-    el.wsName.textContent = state.workspace.name;
+    displayName = libraryName(state.workspace.root) || state.workspace.name;
+    el.wsName.textContent = displayName;
     el.wsPath.textContent = state.workspace.root;
     el.tree.hidden = false;
     el.sidebarEmpty.hidden = true;
     el.sidebarFoot.hidden = false;
-    el.searchInput.placeholder = '筛选文件，回车全文搜索';
+    el.searchInput.placeholder = '筛选目录，回车搜索全部知识库';
   } else {
-    el.workspaceTitle.textContent = '本地 Markdown 笔记';
-    el.wsName.textContent = '未打开文件夹';
-    el.wsPath.textContent = '选择一个本地文件夹管理 Markdown 文档';
+    el.wsName.textContent = '未选择知识库';
+    el.wsPath.textContent = '选择一个本地文件夹作为知识库';
     el.tree.hidden = true;
     el.sidebarEmpty.hidden = false;
-    el.sidebarFoot.hidden = true;
-    el.searchInput.placeholder = '打开文件夹后可搜索';
+    el.sidebarEmptyText.textContent = state.libraries.length > 0 ? '选择一个知识库' : '还没有知识库';
+    el.sidebarFoot.hidden = state.libraries.length === 0;
+    el.searchInput.placeholder = '添加知识库后可搜索';
     hideSearchResults();
   }
+  el.topCrumb.textContent = state.workspace ? (displayName || state.workspace.name) : '工作台';
   applyLayout();
   syncButtons();
 }
 
 function applyLayout() {
+  const mode = state.settings.viewMode;
   el.app.classList.toggle('sidebar-hidden', !state.settings.sidebar);
-  el.editorWrap.classList.toggle('preview-hidden', !state.settings.preview);
+  el.editorWrap.classList.toggle('mode-editor', mode === 'editor');
+  el.editorWrap.classList.toggle('mode-reading', mode === 'reading');
+  el.editorWrap.classList.toggle('rail-hidden', !state.settings.outline);
   el.split.style.setProperty('--split-pct', `${Math.round(state.settings.split * 100)}%`);
   document.documentElement.style.setProperty('--editor-font-size', `${state.settings.fontSize}px`);
   document.documentElement.style.setProperty('--editor-max-width', state.settings.lineWidth > 0 ? `${state.settings.lineWidth}px` : 'none');
+  el.viewSwitch.querySelectorAll('button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.mode === mode);
+  });
   if (cm) requestAnimationFrame(() => cm.refresh());
 }
 
-function updateWelcome() {
-  const hasWorkspace = Boolean(state.workspace);
-  el.welcomeTitle.textContent = hasWorkspace ? '选择一篇笔记' : 'Markdown 笔记';
-  el.welcomeDesc.textContent = hasWorkspace
-    ? `已打开「${state.workspace.name}」。从左侧选择文件，或新建一篇笔记。`
-    : '轻量、离线、为 Windows 7 32 位优化的 Markdown 编辑器与文档管理工具。';
-  el.welcomeOpenFolder.textContent = hasWorkspace ? '切换文件夹' : '打开文件夹';
-}
-
-function showWelcome() {
-  el.welcome.hidden = false;
-  el.editorWrap.hidden = true;
-  updateWelcome();
+function setView(view) {
+  state.view = view;
+  el.homeView.hidden = view !== 'home';
+  el.libraryView.hidden = view !== 'library';
+  el.searchView.hidden = view !== 'search';
+  el.editorWrap.hidden = view !== 'doc';
+  if (view === 'doc' && cm) requestAnimationFrame(() => cm.refresh());
+  if (view === 'home') refreshHome();
+  if (view === 'library') renderLibraryView();
 }
 
 function showEditor() {
-  el.welcome.hidden = true;
-  el.editorWrap.hidden = false;
-  if (cm) requestAnimationFrame(() => cm.refresh());
+  setView('doc');
+}
+
+function showWelcome() {
+  setView(state.workspace ? 'library' : 'home');
+}
+
+function showHome() {
+  setView('home');
+}
+
+function updateHomeHero() {
+  const hasWorkspace = Boolean(state.workspace);
+  el.welcomeTitle.textContent = state.libraries.length > 0 ? '本地知识库' : '开始建立你的知识库';
+  el.welcomeDesc.textContent = hasWorkspace
+    ? `当前知识库「${libraryName(state.workspace.root) || state.workspace.name}」，共 ${state.workspace.fileCount} 篇 Markdown 文档。`
+    : '添加本地文件夹作为知识库，文档始终以 Markdown 保存在磁盘上。';
+  el.welcomeOpenFolder.textContent = '添加知识库';
+  el.welcomeNewNote.disabled = false;
+}
+
+function recentSubtitle(item) {
+  const lib = libraryForPath(item.path);
+  if (!lib) return item.path;
+  const rel = relativeToRoot(lib.path, item.path);
+  return rel ? `${lib.name} / ${rel}` : lib.name;
 }
 
 function renderRecent() {
   el.recentList.replaceChildren();
-  el.recentWrap.hidden = state.recent.length === 0;
-  for (const item of state.recent.slice(0, 8)) {
+  const items = state.recent.slice(0, 10);
+  el.recentWrap.hidden = items.length === 0;
+  el.recentEmpty.hidden = items.length > 0;
+  for (const item of items) {
     const button = document.createElement('div');
     button.className = 'recent-item';
     button.title = item.path;
     button.setAttribute('role', 'button');
     button.tabIndex = 0;
-    const type = document.createElement('span');
-    type.className = 'recent-type';
-    type.textContent = item.type === 'folder' ? '夹' : '文';
     const main = document.createElement('span');
     main.className = 'recent-main';
     const name = document.createElement('div');
     name.className = 'recent-name';
-    name.textContent = item.name || baseName(item.path);
+    name.textContent = stemName(item.name || baseName(item.path));
     const path = document.createElement('div');
     path.className = 'recent-path';
-    path.textContent = item.path;
+    path.textContent = recentSubtitle(item);
     main.append(name, path);
     const remove = document.createElement('button');
     remove.type = 'button';
@@ -527,7 +689,7 @@ function renderRecent() {
       event.stopPropagation();
       removeRecentItem(item);
     });
-    button.append(type, main, remove);
+    button.append(main, remove);
     button.addEventListener('click', () => openRecentItem(item));
     button.addEventListener('keydown', (event) => {
       if (event.target !== button) return;
@@ -537,6 +699,53 @@ function renderRecent() {
       }
     });
     el.recentList.append(button);
+  }
+}
+
+function renderStarred() {
+  el.starredList.replaceChildren();
+  const items = state.starred.slice();
+  el.starredWrap.hidden = items.length === 0;
+  el.starredEmpty.hidden = items.length > 0;
+  for (const star of items) {
+    const row = document.createElement('div');
+    row.className = 'recent-item';
+    row.title = star.library && star.relPath ? `${star.library} / ${star.relPath}` : star.name;
+    row.setAttribute('role', 'button');
+    row.tabIndex = 0;
+    const main = document.createElement('span');
+    main.className = 'recent-main';
+    const name = document.createElement('div');
+    name.className = 'recent-name';
+    name.textContent = stemName(star.name || baseName(star.relPath));
+    const path = document.createElement('div');
+    path.className = 'recent-path';
+    path.textContent = `${star.libraryName || libraryName(star.library)}${star.relPath ? ` / ${star.relPath}` : ''}`;
+    main.append(name, path);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'star-toggle';
+    remove.textContent = '★';
+    remove.title = '取消收藏';
+    remove.setAttribute('aria-label', `取消收藏 ${star.name || star.relPath}`);
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleStar(star.library, star.relPath);
+    });
+    row.append(main, remove);
+    const open = async () => {
+      if (!(await ensureLibraryContext(star.library))) return;
+      await openRel(star.relPath, null, { library: star.library });
+    };
+    row.addEventListener('click', open);
+    row.addEventListener('keydown', (event) => {
+      if (event.target !== row) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+    el.starredList.append(row);
   }
 }
 
@@ -577,6 +786,433 @@ async function refreshRecent() {
     renderRecent();
   } catch {
     // 最近记录失败不影响编辑。
+  }
+}
+
+const MAX_RENDERED_DOCS = 500;
+
+function libraryInitial(lib) {
+  const name = String((lib && lib.name) || '知').trim();
+  return name ? name.charAt(0) : '知';
+}
+
+function renderLibraries() {
+  el.libraryList.replaceChildren();
+  if (state.libraries.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'tree-empty';
+    empty.textContent = '还没有知识库';
+    el.libraryList.append(empty);
+  }
+  for (const lib of state.libraries) {
+    const active = Boolean(state.workspace && samePath(state.workspace.root, lib.path));
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'library-row';
+    row.dataset.path = lib.path;
+    row.classList.toggle('active', active);
+    row.classList.toggle('missing', lib.exists === false);
+    row.title = lib.exists === false ? `${lib.path}（路径不可用）` : lib.path;
+    const icon = document.createElement('span');
+    icon.className = 'library-icon';
+    icon.textContent = libraryInitial(lib);
+    const name = document.createElement('span');
+    name.className = 'library-name';
+    name.textContent = lib.name || baseName(lib.path);
+    row.append(icon, name);
+    row.addEventListener('click', () => switchLibrary(lib.path));
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      showLibraryMenu(event, lib);
+    });
+    el.libraryList.append(row);
+  }
+  renderLibraryCards();
+}
+
+function renderLibraryCards() {
+  el.libraryCards.replaceChildren();
+  for (const lib of state.libraries) {
+    const active = Boolean(state.workspace && samePath(state.workspace.root, lib.path));
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'lib-card';
+    card.dataset.path = lib.path;
+    card.classList.toggle('active', active);
+    card.classList.toggle('missing', lib.exists === false);
+    card.title = lib.path;
+    const icon = document.createElement('span');
+    icon.className = 'lib-card-icon';
+    icon.textContent = libraryInitial(lib);
+    const name = document.createElement('span');
+    name.className = 'lib-card-name';
+    name.textContent = lib.name || baseName(lib.path);
+    const path = document.createElement('span');
+    path.className = 'lib-card-path';
+    path.textContent = lib.exists === false ? '路径不可用' : lib.path;
+    const meta = document.createElement('span');
+    meta.className = 'lib-card-meta';
+    meta.textContent = lib.docCount ? `${lib.docCount} 篇文档` : '尚未打开';
+    card.append(icon, name, path, meta);
+    card.addEventListener('click', () => switchLibrary(lib.path));
+    card.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      showLibraryMenu(event, lib);
+    });
+    el.libraryCards.append(card);
+  }
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'lib-card add';
+  add.textContent = '＋ 添加知识库';
+  add.addEventListener('click', addLibraryDialog);
+  el.libraryCards.append(add);
+}
+
+function showLibraryMenu(event, lib) {
+  showMenuAt(event, [
+    { label: '打开', action: () => switchLibrary(lib.path) },
+    { label: '重命名…', action: () => renameLibrary(lib) },
+    {
+      label: '在资源管理器中显示',
+      action: () => bridge.reveal({ path: lib.path }).catch((error) => {
+        showToast(`定位失败：${error.message}`, 'error');
+      })
+    },
+    { label: '从列表移除…', danger: true, action: () => removeLibrary(lib) }
+  ]);
+}
+
+function renderHome() {
+  updateHomeHero();
+  renderLibraries();
+  renderRecent();
+  renderStarred();
+}
+
+async function refreshHome() {
+  if (!bridge) return;
+  const token = ++state.homeToken;
+  try {
+    const data = await bridge.getHome();
+    if (token !== state.homeToken) return;
+    state.libraries = Array.isArray(data.libraries) ? data.libraries : state.libraries;
+    state.recent = Array.isArray(data.recent) ? data.recent : state.recent;
+    state.starred = Array.isArray(data.starred) ? data.starred : state.starred;
+    renderHome();
+  } catch (error) {
+    logError(`刷新工作台失败：${error.stack || error}`);
+  }
+}
+
+async function addLibraryDialog() {
+  try {
+    const result = await bridge.addLibrary();
+    if (!result) return;
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
+    if (result.workspace) applyWorkspace(result.workspace);
+    setView('library');
+    scheduleCatalogRefresh(true);
+    await refreshHome();
+    showToast('已添加知识库', 'success');
+  } catch (error) {
+    showToast(`添加知识库失败：${error.message}`, 'error');
+  }
+}
+
+async function switchLibrary(libraryPath) {
+  const token = ++state.contextToken;
+  try {
+    const result = await bridge.openLibrary(libraryPath);
+    if (token !== state.contextToken) return;
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
+    applyWorkspace(result.workspace);
+    state.tagFilter = null;
+    setView('library');
+    scheduleCatalogRefresh(true);
+    await refreshHome();
+  } catch (error) {
+    showToast(`切换知识库失败：${error.message}`, 'error');
+  }
+}
+
+async function ensureLibraryContext(libraryPath) {
+  if (!libraryPath) return false;
+  if (state.workspace && samePath(state.workspace.root, libraryPath)) return true;
+  const token = ++state.contextToken;
+  try {
+    const result = await bridge.openLibrary(libraryPath);
+    if (token !== state.contextToken) return false;
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
+    applyWorkspace(result.workspace);
+    scheduleCatalogRefresh(true);
+    return true;
+  } catch (error) {
+    logError(`切换知识库失败：${error.stack || error}`);
+    showToast(`切换知识库失败：${error.message}`, 'error');
+    return false;
+  }
+}
+
+async function removeLibrary(lib) {
+  if (!lib) return;
+  const localTabs = state.tabs.filter((tab) => tab.libraryRoot && samePath(tab.libraryRoot, lib.path));
+  let blocked = false;
+  for (const tab of localTabs) {
+    if (tab.conflict || tab.missing || tab.recovered) {
+      blocked = blocked || Boolean(tab.dirty || tab.recovered);
+      continue;
+    }
+    if (!tab.dirty) continue;
+    const ok = await requestSave(tab);
+    if (!ok) blocked = true;
+  }
+  if (blocked) {
+    showToast('该知识库有恢复中或保存失败的草稿，请先处理', 'warn');
+    return;
+  }
+  const answer = await bridge.confirm({
+    type: 'warning',
+    title: '移除知识库',
+    message: `从列表移除「${lib.name || baseName(lib.path)}」？`,
+    detail: '只会从列表中移除，不会删除磁盘上的文件。该库内已打开的标签页会关闭。',
+    buttons: ['取消', '移除'],
+    defaultId: 0,
+    cancelId: 0
+  });
+  if (answer.response !== 1) return;
+  try {
+    const result = await bridge.removeLibrary(lib.path);
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : [];
+    if (result.workspace) {
+      applyWorkspace(result.workspace);
+    } else {
+      state.workspace = null;
+      state.catalog = { documents: [], tags: [], truncated: false };
+      state.catalogLoading = false;
+      updateWorkspaceChrome();
+      renderTree();
+      renderLibraryView();
+    }
+    const affected = state.tabs.filter((tab) => tab.libraryRoot && samePath(tab.libraryRoot, lib.path));
+    if (affected.length > 0) {
+      const wasActive = affected.some((tab) => tab.id === state.activeId);
+      for (const tab of affected) clearRecovery(tab);
+      state.tabs = state.tabs.filter((tab) => !affected.includes(tab));
+      renderTabBar();
+      if (wasActive) {
+        const next = state.tabs[0] || null;
+        state.activeId = null;
+        if (next) activateTab(next.id, { focus: false });
+        else showWelcome();
+      }
+    }
+    if (!activeTab() && state.view === 'doc') showWelcome();
+    else if (activeTab()) afterTabActivated(activeTab());
+    await refreshHome();
+    showToast('已从列表移除知识库，磁盘文件未删除', 'success');
+  } catch (error) {
+    showToast(`移除知识库失败：${error.message}`, 'error');
+  }
+}
+
+async function renameLibrary(lib) {
+  if (!lib) return;
+  const name = await promptName({
+    title: '重命名知识库',
+    description: lib.path,
+    value: lib.name || baseName(lib.path),
+    placeholder: '知识库名称'
+  });
+  if (!name || name === lib.name) return;
+  try {
+    const result = await bridge.renameLibrary({ library: lib.path, name });
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
+    renderHome();
+    updateWorkspaceChrome();
+    renderLibraryView();
+    if (activeTab()) updateTitle();
+  } catch (error) {
+    showToast(`重命名知识库失败：${error.message}`, 'error');
+  }
+}
+
+function renderLibraryView() {
+  const workspace = state.workspace;
+  if (!workspace) {
+    el.libTitle.textContent = '';
+    el.libPath.textContent = '';
+    el.docList.replaceChildren();
+    el.tagFilter.replaceChildren();
+    el.tagFilter.hidden = true;
+    el.libEmpty.hidden = true;
+    el.libLoading.hidden = true;
+    el.libTruncated.hidden = true;
+    return;
+  }
+  el.libTitle.textContent = libraryName(workspace.root) || workspace.name;
+  el.libPath.textContent = workspace.root;
+  el.libSort.value = state.settings.librarySort;
+  const tags = Array.isArray(state.catalog.tags) ? state.catalog.tags : [];
+  el.tagFilter.replaceChildren();
+  el.tagFilter.hidden = tags.length === 0 && !state.tagFilter;
+  if (!el.tagFilter.hidden) {
+    const all = document.createElement('button');
+    all.type = 'button';
+    all.className = 'tag-chip';
+    all.classList.toggle('active', !state.tagFilter);
+    all.textContent = '全部';
+    all.addEventListener('click', () => {
+      state.tagFilter = null;
+      renderLibraryView();
+    });
+    el.tagFilter.append(all);
+    for (const tag of tags) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'tag-chip';
+      chip.classList.toggle('active', Boolean(state.tagFilter && state.tagFilter.toLowerCase() === tag.name.toLowerCase()));
+      const label = document.createElement('span');
+      label.textContent = tag.name;
+      const count = document.createElement('span');
+      count.className = 'tag-count';
+      count.textContent = String(tag.count);
+      chip.append(label, count);
+      chip.addEventListener('click', () => {
+        state.tagFilter = state.tagFilter && state.tagFilter.toLowerCase() === tag.name.toLowerCase() ? null : tag.name;
+        renderLibraryView();
+      });
+      el.tagFilter.append(chip);
+    }
+  }
+  let documents = Array.isArray(state.catalog.documents) ? state.catalog.documents.slice() : [];
+  if (state.tagFilter) {
+    const needle = state.tagFilter.toLowerCase();
+    documents = documents.filter((doc) => (doc.tags || []).some((tag) => tag.toLowerCase() === needle));
+  }
+  const collator = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+  if (state.settings.librarySort === 'name') {
+    documents.sort((a, b) => collator.compare(a.title || a.name, b.title || b.name) || collator.compare(a.relPath, b.relPath));
+  } else {
+    documents.sort((a, b) => (Number(b.mtimeMs) || 0) - (Number(a.mtimeMs) || 0)
+      || collator.compare(a.title || a.name, b.title || b.name));
+  }
+  const visible = documents.slice(0, MAX_RENDERED_DOCS);
+  el.docList.replaceChildren();
+  for (const doc of visible) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'doc-row';
+    row.title = doc.relPath;
+    const title = document.createElement('span');
+    title.className = 'doc-row-title';
+    title.textContent = doc.title || stemName(doc.name);
+    const path = document.createElement('span');
+    path.className = 'doc-row-path';
+    path.textContent = dirname(doc.relPath) || '根目录';
+    const meta = document.createElement('span');
+    meta.className = 'doc-row-meta';
+    const time = document.createElement('span');
+    time.textContent = formatTime(doc.mtimeMs);
+    meta.append(time);
+    if (Number.isFinite(doc.words)) {
+      const words = document.createElement('span');
+      words.textContent = `${doc.words.toLocaleString('zh-CN')} 字`;
+      meta.append(words);
+    }
+    if (Array.isArray(doc.tags) && doc.tags.length > 0) {
+      const tagWrap = document.createElement('span');
+      tagWrap.className = 'doc-row-tags';
+      for (const tag of doc.tags.slice(0, 6)) {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.textContent = tag;
+        tagWrap.append(chip);
+      }
+      meta.append(tagWrap);
+    }
+    row.append(title, path, meta);
+    row.addEventListener('click', () => openRel(doc.relPath, null, { library: workspace.root }));
+    el.docList.append(row);
+  }
+  el.libLoading.hidden = !state.catalogLoading;
+  el.libEmpty.hidden = state.catalogLoading || visible.length > 0;
+  el.libEmpty.textContent = state.tagFilter
+    ? `没有带标签「${state.tagFilter}」的文档。`
+    : '这个知识库还没有文档，点击「新建笔记」开始。';
+  if (state.catalog.truncated) {
+    el.libTruncated.hidden = false;
+    el.libTruncated.textContent = '文档过多，索引仅覆盖前 3000 篇；目录树仍可打开全部文件。';
+  } else if (documents.length > MAX_RENDERED_DOCS) {
+    el.libTruncated.hidden = false;
+    el.libTruncated.textContent = '仅显示前 500 篇，请用目录树或搜索定位其余文档。';
+  } else {
+    el.libTruncated.hidden = true;
+    el.libTruncated.textContent = '';
+  }
+}
+
+async function refreshCatalog(refresh = false) {
+  if (!state.workspace) {
+    state.catalog = { documents: [], tags: [], truncated: false };
+    state.catalogLoading = false;
+    renderLibraryView();
+    return;
+  }
+  const root = state.workspace.root;
+  const token = ++state.catalogToken;
+  state.catalogLoading = true;
+  renderLibraryView();
+  try {
+    const data = await bridge.getCatalog({ library: root, refresh: Boolean(refresh) });
+    if (token !== state.catalogToken || !state.workspace || !samePath(state.workspace.root, root)) return;
+    state.catalog = {
+      documents: Array.isArray(data.documents) ? data.documents : [],
+      tags: Array.isArray(data.tags) ? data.tags : [],
+      truncated: Boolean(data.truncated)
+    };
+  } catch (error) {
+    if (token !== state.catalogToken) return;
+    showToast(`文档索引失败：${error.message}`, 'error');
+    logError(`文档索引失败：${error.stack || error}`);
+  }
+  state.catalogLoading = false;
+  renderLibraryView();
+}
+
+function scheduleCatalogRefresh(refresh = false) {
+  clearTimeout(catalogTimer);
+  catalogTimer = setTimeout(() => refreshCatalog(refresh), 500);
+}
+
+async function toggleStar(library = (activeTab() ? activeTab().libraryRoot : null), relPath = (activeTab() ? activeTab().relPath : null)) {
+  if (!library || !relPath) return;
+  try {
+    const data = await bridge.toggleStar({ library, relPath });
+    state.starred = Array.isArray(data.starred) ? data.starred : state.starred;
+    renderStarButton();
+    renderStarred();
+  } catch (error) {
+    showToast(`收藏操作失败：${error.message}`, 'error');
+  }
+}
+
+async function openWikiLink(target) {
+  const tab = activeTab();
+  if (!tab || !tab.libraryRoot) {
+    showToast('请先将文档保存到知识库', 'warn');
+    return;
+  }
+  try {
+    const resolved = await bridge.resolveWiki({ library: tab.libraryRoot, target });
+    if (!resolved) {
+      showToast(`未找到「${target}」`, 'warn');
+      return;
+    }
+    if (!(await ensureLibraryContext(tab.libraryRoot))) return;
+    await openRel(resolved.relPath, null, { library: tab.libraryRoot });
+  } catch (error) {
+    showToast(`打开双链失败：${error.message}`, 'error');
   }
 }
 
@@ -638,9 +1274,30 @@ function loadTabIntoEditor(tab) {
   requestAnimationFrame(() => cm.refresh());
 }
 
+function jumpToLine(line) {
+  if (!line) return;
+  if (state.settings.viewMode === 'reading') updateSettings({ viewMode: 'split' });
+  gotoLine(line);
+}
+
+function afterTabActivated(tab, options = {}) {
+  renderDocRail();
+  renderStarButton();
+  if (tab) {
+    refreshBacklinks();
+    ensureLibraryContext(tab.libraryRoot);
+    if (options.line) jumpToLine(options.line);
+  }
+}
+
 function activateTab(id, options = {}) {
   if (state.activeId === id) {
-    if (options.line) gotoLine(options.line);
+    const current = activeTab();
+    if (current) {
+      showEditor();
+      ensureLibraryContext(current.libraryRoot);
+    }
+    if (options.line) jumpToLine(options.line);
     return;
   }
   const previous = activeTab();
@@ -660,14 +1317,16 @@ function activateTab(id, options = {}) {
   renderOutline();
   renderTree();
   showEditor();
-  if (options.line) gotoLine(options.line);
-  else if (options.focus !== false && cm) cm.focus();
+  afterTabActivated(tab, options);
+  if (!options.line && options.focus !== false && cm) cm.focus();
 }
 
 function createTab(doc, options = {}) {
+  const lib = doc.library ? { path: doc.library } : libraryForPath(doc.path);
   const tab = {
     id: state.nextTabId,
     path: doc.path || null,
+    libraryRoot: doc.library || (lib ? lib.path : null),
     relPath: doc.relPath == null ? null : doc.relPath,
     name: doc.name || baseName(doc.path),
     eol: doc.eol || 'lf',
@@ -713,8 +1372,8 @@ function openDoc(doc, options = {}) {
   renderOutline();
   renderTree();
   showEditor();
-  if (options.line) gotoLine(options.line);
-  else if (options.focus !== false && cm) cm.focus();
+  afterTabActivated(tab, options);
+  if (!options.line && options.focus !== false && cm) cm.focus();
   return tab;
 }
 
@@ -746,6 +1405,7 @@ function closeTab(id, options = {}) {
         renderOutline();
         renderTree();
         showEditor();
+        afterTabActivated(next);
       } else {
         renderTabBar();
         showWelcome();
@@ -792,8 +1452,7 @@ async function saveTab(tab, options = {}) {
   let result;
   try {
     result = await bridge.save({
-      path: tab.path,
-      relPath: tab.relPath,
+      ...docPayload(tab),
       content: snapshot,
       eol: tab.eol,
       encoding: tab.encoding,
@@ -830,6 +1489,7 @@ async function saveTab(tab, options = {}) {
   tab.missing = false;
   tab.recovered = false;
   tab.mtimeMs = result.mtimeMs;
+  if (result.library !== undefined) tab.libraryRoot = result.library;
   if (result.relPath !== undefined) tab.relPath = result.relPath;
   tab.savedText = snapshot;
   tab.dirty = tab.text !== snapshot;
@@ -838,6 +1498,8 @@ async function saveTab(tab, options = {}) {
     updateTitle();
     updateStatus();
     updateBanners();
+    if (state.workspace && samePath(tab.libraryRoot, state.workspace.root)) scheduleCatalogRefresh(false);
+    scheduleBacklinkRefresh();
   }
   renderTabBar();
   if (tab.dirty && tab.id === state.activeId) scheduleAutosave(tab);
@@ -894,6 +1556,7 @@ async function persistRecovery() {
       await bridge.saveRecovery({
         key: recoveryKey(tab),
         path: tab.path,
+        library: tab.libraryRoot,
         name: tab.name,
         relPath: tab.relPath,
         content: tab.text,
@@ -949,6 +1612,7 @@ async function restoreRecovery() {
     } else {
       const tab = createTab({
         path: entry.path,
+        library: entry.library || (libraryForPath(entry.path) || {}).path || null,
         relPath: entry.relPath,
         name: entry.name,
         content: entry.content,
@@ -1066,7 +1730,7 @@ function onEditorScroll() {
   if (!tab || !cm) return;
   const info = cm.getScrollInfo();
   tab.scroll = { left: info.left, top: info.top };
-  if (!state.settings.preview) return;
+  if (state.settings.viewMode === 'editor') return;
   syncEditorToPreview(info);
 }
 
@@ -1178,7 +1842,7 @@ async function insertImageFromPicker() {
     return;
   }
   try {
-    const result = await bridge.pickImage({ path: tab.path, relPath: tab.relPath });
+    const result = await bridge.pickImage(docPayload(tab));
     if (!result) return;
     insertText(`![${altTextFor(result.name)}](${result.relPath})`);
   } catch (error) {
@@ -1193,8 +1857,7 @@ async function insertImageBuffer(file) {
   try {
     const data = new Uint8Array(await file.arrayBuffer());
     const result = await bridge.saveImageBuffer({
-      path: tab.path,
-      relPath: tab.relPath,
+      ...docPayload(tab),
       name: file.name || `image.${file.type.split('/')[1] || 'png'}`,
       mime: file.type,
       data
@@ -1291,6 +1954,8 @@ function clearFindMarks() {
 
 function openFind() {
   if (!activeTab()) return;
+  if (state.settings.viewMode === 'reading') updateSettings({ viewMode: 'split' });
+  if (state.view !== 'doc') setView('doc');
   state.find.open = true;
   el.findbar.hidden = false;
   el.findInput.focus();
@@ -1394,10 +2059,13 @@ function replaceAllMatches() {
 function renderOutline() {
   const tab = activeTab();
   state.outline = tab ? T.extractHeadings(tab.text) : [];
-  const visible = Boolean(tab) && state.settings.outline && state.outline.length > 0;
+  const visible = Boolean(tab) && state.outline.length > 0;
   el.outlinePanel.hidden = !visible;
   el.outlineList.replaceChildren();
-  if (!visible) return;
+  if (!visible) {
+    el.outlineCount.textContent = '';
+    return;
+  }
   el.outlineCount.textContent = `${state.outline.length}`;
   state.outline.forEach((heading, index) => {
     const button = document.createElement('button');
@@ -1406,10 +2074,21 @@ function renderOutline() {
     button.textContent = heading.text;
     button.title = heading.text;
     button.dataset.index = String(index);
-    button.addEventListener('click', () => gotoLine(heading.line + 1));
+    button.addEventListener('click', () => {
+      if (state.settings.viewMode === 'reading') scrollPreviewToHeading(index);
+      else gotoLine(heading.line + 1);
+    });
     el.outlineList.append(button);
   });
   updateOutlineActive(cm ? cm.getCursor().line : 0);
+}
+
+function scrollPreviewToHeading(index) {
+  const headings = previewHeadingElements();
+  const target = headings[index];
+  if (!target) return;
+  const top = target.getBoundingClientRect().top - el.previewPane.getBoundingClientRect().top + el.previewPane.scrollTop - 8;
+  el.previewPane.scrollTop = Math.max(0, top);
 }
 
 function updateOutlineActive(line) {
@@ -1417,6 +2096,120 @@ function updateOutlineActive(line) {
   const active = outlineIndexForLine(line);
   const items = el.outlineList.querySelectorAll('.outline-item');
   items.forEach((item, index) => item.classList.toggle('active', index === active));
+}
+
+function isStarred(tab) {
+  if (!tab || !tab.libraryRoot || !tab.relPath) return false;
+  return state.starred.some((star) => samePath(star.library, tab.libraryRoot) && star.relPath === tab.relPath);
+}
+
+function renderStarButton() {
+  const tab = activeTab();
+  const starred = isStarred(tab);
+  el.btnStar.textContent = starred ? '★' : '☆';
+  el.btnStar.classList.toggle('starred', starred);
+  el.btnStar.disabled = !tab || !tab.libraryRoot;
+  el.btnStar.title = starred ? '取消收藏' : '收藏';
+}
+
+function renderDocRail() {
+  const tab = activeTab();
+  el.docRail.hidden = !tab;
+  renderDocTags();
+  renderBacklinks();
+}
+
+function renderDocTags() {
+  el.docTags.replaceChildren();
+  const tab = activeTab();
+  const tags = tab ? T.parseFrontmatter(tab.text).tags : [];
+  if (tags.length === 0) {
+    const empty = document.createElement('span');
+    empty.className = 'tag-empty';
+    empty.textContent = tab ? '无标签' : '';
+    el.docTags.append(empty);
+    return;
+  }
+  for (const tag of tags) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'tag-chip';
+    button.textContent = tag;
+    button.title = `筛选标签：${tag}`;
+    button.addEventListener('click', () => {
+      state.tagFilter = tag;
+      setView('library');
+      renderLibraryView();
+    });
+    el.docTags.append(button);
+  }
+}
+
+function renderBacklinks() {
+  el.backlinkList.replaceChildren();
+  el.backlinkCount.textContent = state.backlinks.length > 0 ? String(state.backlinks.length) : '';
+  const tab = activeTab();
+  if (!tab || !tab.libraryRoot || !tab.relPath) {
+    const empty = document.createElement('div');
+    empty.className = 'backlink-empty';
+    empty.textContent = tab ? '保存到知识库后可查看引用。' : '';
+    el.backlinkList.append(empty);
+    return;
+  }
+  if (state.backlinks.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'backlink-empty';
+    empty.textContent = '还没有文档引用这篇笔记。';
+    el.backlinkList.append(empty);
+    return;
+  }
+  for (const item of state.backlinks) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'backlink-item';
+    button.title = item.relPath;
+    const title = document.createElement('span');
+    title.className = 'backlink-title';
+    title.textContent = item.title || baseName(item.relPath);
+    const path = document.createElement('span');
+    path.className = 'backlink-path';
+    path.textContent = item.relPath;
+    button.append(title, path);
+    button.addEventListener('click', () => openRel(item.relPath, null, { library: tab.libraryRoot }));
+    el.backlinkList.append(button);
+  }
+}
+
+async function refreshBacklinks() {
+  const tab = activeTab();
+  const token = ++state.backlinkToken;
+  if (!tab || !tab.libraryRoot || !tab.relPath) {
+    state.backlinks = [];
+    state.backlinksKey = '';
+    renderBacklinks();
+    return;
+  }
+  const key = `${tab.libraryRoot}|${tab.relPath}`;
+  if (state.backlinksKey !== key) {
+    state.backlinksKey = key;
+    state.backlinks = [];
+    renderBacklinks();
+  }
+  try {
+    const data = await bridge.getBacklinks({ library: tab.libraryRoot, relPath: tab.relPath });
+    if (token !== state.backlinkToken) return;
+    state.backlinks = Array.isArray(data.backlinks) ? data.backlinks : [];
+  } catch (error) {
+    if (token !== state.backlinkToken) return;
+    state.backlinks = [];
+    logError(`读取反向链接失败：${error.stack || error}`);
+  }
+  renderBacklinks();
+}
+
+function scheduleBacklinkRefresh() {
+  clearTimeout(backlinkTimer);
+  backlinkTimer = setTimeout(refreshBacklinks, 600);
 }
 
 /* ---------- 编辑器右键菜单 ---------- */
@@ -1546,7 +2339,9 @@ function renderTree() {
       row.setAttribute('role', 'treeitem');
       if (isDir) row.setAttribute('aria-expanded', String(expanded));
       if (isDir && state.selectedDir === node.relPath) row.classList.add('selected');
-      if (!isDir && tab && tab.relPath === node.relPath) row.classList.add('active');
+      if (!isDir && tab && tab.libraryRoot && samePath(tab.libraryRoot, state.workspace.root) && tab.relPath === node.relPath) {
+        row.classList.add('active');
+      }
       if (isDir && expanded) row.classList.add('open');
       const chevron = document.createElement('span');
       chevron.className = 'chev';
@@ -1603,14 +2398,35 @@ function appendHighlighted(container, text, query) {
 function renderSearchResults(data, query) {
   el.searchResults.replaceChildren();
   el.searchResults.hidden = false;
-  const head = document.createElement('div');
-  head.className = 'search-results-head';
-  const count = document.createElement('span');
-  count.textContent = `${data.results.length} 条结果${data.truncated ? '（已截断）' : ''}`;
-  const hint = document.createElement('span');
-  hint.textContent = `扫描 ${data.filesScanned} 个文件`;
-  head.append(count, hint);
-  el.searchResults.append(head);
+  const groups = [];
+  const groupMap = new Map();
+  for (const hit of data.results) {
+    const key = String(hit.library || '').toLowerCase();
+    let group = groupMap.get(key);
+    if (!group) {
+      group = {
+        library: hit.library,
+        name: hit.libraryName || libraryName(hit.library) || '知识库',
+        count: 0,
+        files: [],
+        fileMap: new Map()
+      };
+      groupMap.set(key, group);
+      groups.push(group);
+    }
+    group.count += 1;
+    let file = group.fileMap.get(hit.relPath);
+    if (!file) {
+      file = { relPath: hit.relPath, name: hit.name, hits: [] };
+      group.fileMap.set(hit.relPath, file);
+      group.files.push(file);
+    }
+    file.hits.push(hit);
+  }
+  const truncated = data.truncated ? '（已截断）' : '';
+  el.searchSummary.textContent = data.results.length === 0
+    ? '没有找到匹配内容'
+    : `在 ${groups.length} 个知识库中找到 ${data.results.length} 条结果${truncated}，扫描 ${data.filesScanned || 0} 个文件`;
   if (data.results.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'search-empty';
@@ -1618,27 +2434,58 @@ function renderSearchResults(data, query) {
     el.searchResults.append(empty);
     return;
   }
-  for (const result of data.results) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'search-result';
-    button.dataset.rel = result.relPath;
-    button.dataset.line = String(result.line);
-    const pathRow = document.createElement('div');
-    pathRow.className = 'sr-path';
-    const name = document.createElement('span');
-    name.textContent = result.name;
-    const line = document.createElement('span');
-    line.className = 'sr-line';
-    line.textContent = `第 ${result.line} 行`;
-    pathRow.append(name, line);
-    const text = document.createElement('div');
-    text.className = 'sr-text';
-    appendHighlighted(text, result.text || '', query);
-    button.append(pathRow, text);
-    button.addEventListener('click', () => openRel(result.relPath, result.line));
-    el.searchResults.append(button);
+  for (const group of groups) {
+    const section = document.createElement('div');
+    section.className = 'search-group';
+    section.dataset.library = group.library || '';
+    const head = document.createElement('div');
+    head.className = 'search-group-head';
+    const title = document.createElement('span');
+    title.textContent = group.name;
+    const count = document.createElement('span');
+    count.textContent = `${group.count} 条`;
+    head.append(title, count);
+    section.append(head);
+    for (const file of group.files) {
+      const fileBlock = document.createElement('div');
+      fileBlock.className = 'search-file';
+      const fileHead = document.createElement('div');
+      fileHead.className = 'search-file-head';
+      const fileName = document.createElement('strong');
+      fileName.textContent = file.name;
+      const filePath = document.createElement('span');
+      filePath.textContent = file.relPath;
+      fileHead.append(fileName, filePath);
+      fileBlock.append(fileHead);
+      for (const hit of file.hits) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'search-result';
+        button.dataset.library = hit.library || '';
+        button.dataset.rel = hit.relPath;
+        button.dataset.line = String(hit.line);
+        const pathRow = document.createElement('div');
+        pathRow.className = 'sr-path';
+        const line = document.createElement('span');
+        line.className = 'sr-line';
+        line.textContent = `第 ${hit.line} 行`;
+        pathRow.append(line);
+        const text = document.createElement('div');
+        text.className = 'sr-text';
+        appendHighlighted(text, hit.text || '', query);
+        button.append(pathRow, text);
+        button.addEventListener('click', () => openSearchHit(hit));
+        fileBlock.append(button);
+      }
+      section.append(fileBlock);
+    }
+    el.searchResults.append(section);
   }
+}
+
+async function openSearchHit(hit) {
+  if (!(await ensureLibraryContext(hit.library))) return;
+  await openRel(hit.relPath, hit.line, { library: hit.library });
 }
 
 async function runSearch() {
@@ -1648,20 +2495,29 @@ async function runSearch() {
     renderTree();
     return;
   }
+  if (state.libraries.length === 0) {
+    showToast('请先添加知识库', 'warn');
+    return;
+  }
+  if (state.view !== 'search') state.viewBeforeSearch = state.view;
+  setView('search');
   const token = ++state.searchToken;
+  el.searchSummary.textContent = '正在搜索全部知识库…';
   el.searchResults.hidden = false;
   el.searchResults.replaceChildren();
   const loading = document.createElement('div');
   loading.className = 'search-loading';
-  loading.textContent = '正在搜索文件内容…';
+  loading.textContent = '正在搜索全部知识库…';
   el.searchResults.append(loading);
   try {
-    const data = await bridge.search(query);
+    const data = await bridge.search({ query });
     if (token !== state.searchToken) return;
+    state.searchData = data;
     renderSearchResults(data, query);
   } catch (error) {
     if (token !== state.searchToken) return;
     el.searchResults.replaceChildren();
+    el.searchSummary.textContent = '搜索失败';
     const message = document.createElement('div');
     message.className = 'search-empty';
     message.textContent = `搜索失败：${error.message}`;
@@ -1671,14 +2527,19 @@ async function runSearch() {
 
 function resetSearchFilter() {
   state.searchToken += 1;
+  state.searchData = null;
   el.searchInput.value = '';
   el.btnClearSearch.hidden = true;
+  el.searchSummary.textContent = '';
   hideSearchResults();
 }
 
 function clearSearch() {
   resetSearchFilter();
   renderTree();
+  if (state.view === 'search') {
+    setView(activeTab() ? 'doc' : (state.workspace ? 'library' : 'home'));
+  }
   el.searchInput.focus();
 }
 
@@ -1734,15 +2595,22 @@ function logError(message) {
 
 /* ---------- 文件与工作区 ---------- */
 
-async function openRel(relPath, line = null) {
+async function openRel(relPath, line = null, options = {}) {
   if (!relPath) return;
-  const existing = state.tabs.find((tab) => tab.relPath === relPath);
+  const library = options.library || (state.workspace ? state.workspace.root : null);
+  if (!library) return;
+  const existing = state.tabs.find((tab) => tab.libraryRoot && samePath(tab.libraryRoot, library) && tab.relPath === relPath);
   if (existing) {
     activateTab(existing.id, { line });
     return;
   }
   try {
-    const doc = await bridge.readFile({ relPath });
+    if (!(await ensureLibraryContext(library))) {
+      showToast('无法切换到知识库', 'error');
+      return;
+    }
+    const doc = await bridge.readFile({ library, relPath });
+    if (line && state.settings.viewMode === 'reading') await updateSettings({ viewMode: 'split' });
     openDoc(doc, { line, focus: true });
     state.selectedDir = dirname(relPath);
     ensureExpanded(relPath);
@@ -1753,24 +2621,13 @@ async function openRel(relPath, line = null) {
   }
 }
 
-async function openWorkspaceDialog() {
-  try {
-    const result = await bridge.chooseFolder();
-    if (!result) return;
-    state.recent = result.recent || state.recent;
-    renderRecent();
-    applyWorkspace(result.workspace);
-    showToast(`已打开 ${result.workspace.name}`, 'success');
-  } catch (error) {
-    showToast(`打开文件夹失败：${error.message}`, 'error');
-  }
-}
-
 async function openFileDialog() {
   try {
     const result = await bridge.chooseFile();
     if (!result) return;
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
     state.recent = result.recent || state.recent;
+    renderLibraries();
     renderRecent();
     if (result.workspace) applyWorkspace(result.workspace);
     if (result.file) openDoc(result.file, { focus: true });
@@ -1783,18 +2640,20 @@ async function openRecentItem(item) {
   if (!item || !item.path) return;
   try {
     const result = await bridge.openRecent(item.path);
+    state.libraries = Array.isArray(result.libraries) ? result.libraries : state.libraries;
     state.recent = result.recent || state.recent;
+    renderLibraries();
     renderRecent();
     if (result.workspace) applyWorkspace(result.workspace);
     if (result.file) openDoc(result.file, { focus: true });
   } catch (error) {
-    showToast(`打开最近项目失败：${error.message}`, 'error');
+    showToast(`打开最近文档失败：${error.message}`, 'error');
   }
 }
 
 async function newNote(parentRelOverride) {
   if (!state.workspace) {
-    await openWorkspaceDialog();
+    await addLibraryDialog();
     if (!state.workspace) return;
   }
   const parentRel = parentRelOverride != null ? parentRelOverride : (state.selectedDir || '');
@@ -1811,9 +2670,10 @@ async function newNote(parentRelOverride) {
     resetSearchFilter();
     state.selectedDir = parentRel;
     ensureExpanded(result.entry.relPath);
-    const doc = await bridge.readFile({ relPath: result.entry.relPath });
+    const doc = await bridge.readFile({ library: state.workspace.root, relPath: result.entry.relPath });
     if (state.platform === 'win32' && !doc.content) doc.eol = 'crlf';
     openDoc(doc, { focus: true });
+    scheduleCatalogRefresh(false);
     await refreshRecent();
     showToast(`已创建 ${result.entry.name}`, 'success');
   } catch (error) {
@@ -1823,7 +2683,7 @@ async function newNote(parentRelOverride) {
 
 async function newFolder(parentRelOverride) {
   if (!state.workspace) {
-    showToast('请先打开一个文件夹', 'warn');
+    showToast('请先添加知识库', 'warn');
     return;
   }
   const parentRel = parentRelOverride != null ? parentRelOverride : (state.selectedDir || '');
@@ -1850,11 +2710,11 @@ async function newFolder(parentRelOverride) {
 
 function remapTabPaths(oldRel, newRel) {
   for (const tab of state.tabs) {
-    if (!tab.relPath) continue;
+    if (!tab.relPath || !tab.libraryRoot || !state.workspace || !samePath(tab.libraryRoot, state.workspace.root)) continue;
     if (tab.relPath === oldRel || tab.relPath.startsWith(`${oldRel}/`)) {
       const suffix = tab.relPath.slice(oldRel.length);
       tab.relPath = `${newRel}${suffix}`;
-      tab.path = absFromRel(state.workspace ? state.workspace.root : '', tab.relPath);
+      tab.path = absFromRel(tab.libraryRoot, tab.relPath);
       tab.name = baseName(tab.relPath);
     }
   }
@@ -1878,6 +2738,9 @@ async function renameNode(node) {
     updateTitle();
     updateStatus();
     renderTree();
+    scheduleCatalogRefresh(false);
+    refreshBacklinks();
+    await refreshHome();
     showToast('已重命名', 'success');
   } catch (error) {
     showToast(`重命名失败：${error.message}`, 'error');
@@ -1886,7 +2749,10 @@ async function renameNode(node) {
 
 async function deleteNode(node) {
   const isDir = node.type === 'dir';
-  const affected = state.tabs.filter((tab) => tab.relPath
+  const activeLibrary = state.workspace ? state.workspace.root : null;
+  const affected = state.tabs.filter((tab) => tab.libraryRoot && activeLibrary
+    && samePath(tab.libraryRoot, activeLibrary)
+    && tab.relPath
     && (tab.relPath === node.relPath || tab.relPath.startsWith(`${node.relPath}/`)));
   const dirtyAffected = affected.filter((tab) => tab.dirty || tab.recovered);
   const answer = await bridge.confirm({
@@ -1907,8 +2773,19 @@ async function deleteNode(node) {
     state.tabs = state.tabs.filter((tab) => !affected.includes(tab));
     if (!state.tabs.some((tab) => tab.id === state.activeId)) {
       const next = state.tabs[0] || null;
-      state.activeId = next ? next.id : null;
-      if (next) loadTabIntoEditor(next);
+      state.activeId = null;
+      if (next) {
+        loadTabIntoEditor(next);
+        renderTabBar();
+        updateTitle();
+        updateStatus();
+        updateBanners();
+        renderPreview();
+        renderOutline();
+        renderTree();
+        showEditor();
+        afterTabActivated(next);
+      }
     }
     applyWorkspace(result.workspace);
     if (!activeTab()) showWelcome();
@@ -1918,7 +2795,10 @@ async function deleteNode(node) {
     updateBanners();
     renderPreview();
     renderOutline();
+    scheduleCatalogRefresh(false);
+    refreshBacklinks();
     await refreshRecent();
+    await refreshHome();
     showToast('已移到回收站', 'success');
   } catch (error) {
     showToast(`删除失败：${error.message}`, 'error');
@@ -1927,7 +2807,7 @@ async function deleteNode(node) {
 
 async function revealNode(node) {
   try {
-    await bridge.reveal({ relPath: node.relPath });
+    await bridge.reveal({ library: state.workspace ? state.workspace.root : null, relPath: node.relPath });
   } catch (error) {
     showToast(`定位失败：${error.message}`, 'error');
   }
@@ -1937,7 +2817,7 @@ async function revealCurrent() {
   const tab = activeTab();
   if (!tab) return;
   try {
-    if (tab.relPath) await bridge.reveal({ relPath: tab.relPath });
+    if (tab.relPath && tab.libraryRoot) await bridge.reveal({ library: tab.libraryRoot, relPath: tab.relPath });
     else if (tab.path) await bridge.reveal({ path: tab.path });
   } catch (error) {
     showToast(`定位失败：${error.message}`, 'error');
@@ -1948,7 +2828,15 @@ async function openLocalLink(href) {
   const baseDir = baseDirForRender(activeTab());
   try {
     const result = await bridge.openLink({ baseDir, href });
-    if (result.workspace) applyWorkspace(result.workspace);
+    if (result.libraries) {
+      state.libraries = result.libraries;
+      renderLibraries();
+    }
+    if (result.workspace) {
+      applyWorkspace(result.workspace);
+      setView('library');
+      scheduleCatalogRefresh(true);
+    }
     if (result.file) openDoc(result.file, { focus: true });
   } catch (error) {
     showToast(`打开链接失败：${error.message}`, 'error');
@@ -1958,36 +2846,43 @@ async function openLocalLink(href) {
 function applyWorkspace(workspace) {
   if (!workspace) return;
   const previousRoot = state.workspace ? state.workspace.root.toLowerCase() : '';
-  const nextRoot = workspace.root.toLowerCase();
-  const rootChanged = previousRoot !== nextRoot;
+  const rootChanged = previousRoot !== workspace.root.toLowerCase();
   state.workspace = workspace;
   state.lastRefresh = Date.now();
-  if (rootChanged) resetSearchFilter();
-  for (const tab of state.tabs) {
-    if (!tab.path) continue;
-    const rel = relativeToRoot(workspace.root, tab.path);
-    tab.relPath = rel == null ? null : (rel || null);
+  if (rootChanged) {
+    resetSearchFilter();
+    state.selectedDir = '';
+    state.expanded = new Set();
+    state.tagFilter = null;
+    state.catalog = { documents: [], tags: [], truncated: false };
+    state.catalogLoading = false;
+    state.backlinks = [];
+    state.backlinksKey = '';
+    state.backlinkToken += 1;
+    scheduleCatalogRefresh(true);
   }
   if (workspace.truncated) {
     showToast('文件夹内容过多，目录只显示了前 5000 项。', 'warn', 6500);
   }
   updateWorkspaceChrome();
-  updateWelcome();
+  renderLibraries();
   renderTree();
+  renderLibraryView();
+  renderDocRail();
   if (activeTab()) {
     updateTitle();
     updateStatus();
-  } else {
-    showWelcome();
   }
 }
 
-async function refreshWorkspace(silent = false) {
+async function refreshWorkspace(silent = false, options = {}) {
   if (!state.workspace) return;
   try {
-    const workspace = await bridge.refreshWorkspace();
-    if (!workspace) return;
-    applyWorkspace(workspace);
+    const data = await bridge.refreshWorkspace();
+    if (!data || !data.workspace) return;
+    applyWorkspace(data.workspace);
+    if (options.catalog !== false) scheduleCatalogRefresh(true);
+    scheduleBacklinkRefresh();
   } catch (error) {
     if (!silent) showToast(`刷新失败：${error.message}`, 'error');
   }
@@ -2002,6 +2897,7 @@ async function saveAs() {
   try {
     const result = await bridge.saveAs({
       path: tab.path,
+      library: tab.libraryRoot,
       relPath: tab.relPath,
       suggestedName: tab.name,
       content: tab.text,
@@ -2017,6 +2913,7 @@ async function saveAs() {
       clearRecovery(duplicate);
     }
     tab.path = result.path;
+    tab.libraryRoot = result.library || null;
     tab.relPath = result.relPath;
     tab.name = result.name;
     tab.eol = result.eol;
@@ -2034,14 +2931,20 @@ async function saveAs() {
     updateStatus();
     updateBanners();
     renderTabBar();
-    if (result.relPath) {
-      state.selectedDir = dirname(result.relPath);
-      ensureExpanded(result.relPath);
+    renderDocRail();
+    renderStarButton();
+    refreshBacklinks();
+    if (result.library && state.workspace && samePath(result.library, state.workspace.root)) {
+      if (result.relPath) {
+        state.selectedDir = dirname(result.relPath);
+        ensureExpanded(result.relPath);
+      }
       await refreshWorkspace(true);
     } else {
       renderTree();
     }
     await refreshRecent();
+    await refreshHome();
     showToast(`已另存为 ${result.name}`, 'success');
   } catch (error) {
     showToast(`另存为失败：${error.message}`, 'error');
@@ -2063,7 +2966,7 @@ async function loadHistory(tab) {
   loading.textContent = '正在读取快照…';
   el.historyList.append(loading);
   try {
-    const items = await bridge.listBackups({ path: tab.path, relPath: tab.relPath });
+    const items = await bridge.listBackups(docPayload(tab));
     el.historyList.replaceChildren();
     if (items.length === 0) {
       const empty = document.createElement('div');
@@ -2105,7 +3008,7 @@ async function createBackupNow() {
   const tab = activeTab();
   if (!tab || !tab.path) return;
   try {
-    await bridge.createBackup({ path: tab.path, relPath: tab.relPath });
+    await bridge.createBackup(docPayload(tab));
     await loadHistory(tab);
     showToast('已创建快照', 'success');
   } catch (error) {
@@ -2115,7 +3018,7 @@ async function createBackupNow() {
 
 async function loadBackupIntoEditor(tab, id) {
   try {
-    const backup = await bridge.readBackup({ path: tab.path, relPath: tab.relPath, id });
+    const backup = await bridge.readBackup({ ...docPayload(tab), id });
     const answer = await bridge.confirm({
       type: 'warning',
       title: '载入快照',
@@ -2165,7 +3068,7 @@ async function reloadConflict() {
   });
   if (answer.response !== 1) return;
   try {
-    const doc = await bridge.readFile(tab.relPath ? { relPath: tab.relPath } : { path: tab.path });
+    const doc = await bridge.readFile(docPayload(tab));
     tab.text = doc.content;
     tab.savedText = doc.content;
     tab.eol = doc.eol;
@@ -2209,11 +3112,14 @@ async function discardMissing() {
 function applySettings(next) {
   state.settings = { ...DEFAULT_SETTINGS, ...(next || {}) };
   if (!Array.isArray(state.settings.ignoreDirs)) state.settings.ignoreDirs = [];
+  if (!['split', 'editor', 'reading'].includes(state.settings.viewMode)) state.settings.viewMode = 'split';
+  if (state.settings.librarySort !== 'name') state.settings.librarySort = 'updated';
   applyTheme();
   applyLayout();
   syncButtons();
   renderPreview();
   renderOutline();
+  renderDocRail();
   updateStatus();
 }
 
@@ -2244,7 +3150,6 @@ function openSettings() {
   $('setAutosaveDelay').value = String(settings.autosaveDelay);
   $('setWordGoal').value = String(settings.wordGoal);
   $('setAutosave').checked = settings.autosave;
-  $('setPreview').checked = settings.preview;
   $('setSidebar').checked = settings.sidebar;
   $('setOutline').checked = settings.outline;
   $('setRemoteImages').checked = settings.remoteImages;
@@ -2263,7 +3168,6 @@ async function saveSettingsForm() {
     autosaveDelay: Number($('setAutosaveDelay').value),
     wordGoal: Number($('setWordGoal').value),
     autosave: $('setAutosave').checked,
-    preview: $('setPreview').checked,
     sidebar: $('setSidebar').checked,
     outline: $('setOutline').checked,
     remoteImages: $('setRemoteImages').checked,
@@ -2282,9 +3186,11 @@ function toggleSidebar() {
   updateSettings({ sidebar: !state.settings.sidebar });
 }
 
-function togglePreview() {
+function toggleReading() {
   if (!activeTab()) return;
-  updateSettings({ preview: !state.settings.preview });
+  const next = state.settings.viewMode === 'reading' ? 'split' : 'reading';
+  if (next === 'reading') closeFind();
+  updateSettings({ viewMode: next });
 }
 
 function toggleOutline() {
@@ -2298,11 +3204,10 @@ function toggleTheme() {
 /* ---------- 菜单动作 ---------- */
 
 function focusSearch() {
-  if (!state.workspace) {
-    showToast('请先打开一个文件夹', 'warn');
+  if (state.libraries.length === 0) {
+    showToast('请先添加知识库', 'warn');
     return;
   }
-  if (!state.settings.sidebar) toggleSidebar();
   el.searchInput.focus();
   el.searchInput.select();
 }
@@ -2312,6 +3217,7 @@ async function printDocument() {
     showToast('没有可打印的文档', 'warn');
     return;
   }
+  setView('doc');
   renderPreview();
   try {
     await bridge.print();
@@ -2324,14 +3230,15 @@ async function handleMenuAction(action) {
   switch (action) {
     case 'new-note': await newNote(); break;
     case 'open-file': await openFileDialog(); break;
-    case 'open-folder': await openWorkspaceDialog(); break;
+    case 'add-library': await addLibraryDialog(); break;
+    case 'home': showHome(); break;
     case 'save': await requestSave(); break;
     case 'save-as': await saveAs(); break;
     case 'close-tab': if (activeTab()) await closeTab(state.activeId); break;
     case 'settings': openSettings(); break;
     case 'find': openFind(); break;
     case 'toggle-sidebar': toggleSidebar(); break;
-    case 'toggle-preview': togglePreview(); break;
+    case 'toggle-reading': toggleReading(); break;
     case 'toggle-outline': toggleOutline(); break;
     case 'focus-search': focusSearch(); break;
     case 'print': await printDocument(); break;
@@ -2341,21 +3248,31 @@ async function handleMenuAction(action) {
 
 async function handleOpenPayload(payload) {
   if (!payload) return;
+  if (payload.libraries) {
+    state.libraries = payload.libraries;
+    renderLibraries();
+  }
   if (payload.recent) {
     state.recent = payload.recent;
     renderRecent();
   }
   if (payload.workspace) applyWorkspace(payload.workspace);
   if (payload.file) openDoc(payload.file, { focus: true });
+  else if (payload.workspace) setView('library');
 }
 
 /* ---------- 事件绑定 ---------- */
 
 function bindEvents() {
   el.btnNewNote.addEventListener('click', () => newNote());
-  el.btnOpenFolder.addEventListener('click', openWorkspaceDialog);
-  el.btnOpenFolderSidebar.addEventListener('click', openWorkspaceDialog);
-  el.welcomeOpenFolder.addEventListener('click', openWorkspaceDialog);
+  el.btnHome.addEventListener('click', showHome);
+  el.btnAddLibrary.addEventListener('click', addLibraryDialog);
+  el.btnAddLibraryCard.addEventListener('click', addLibraryDialog);
+  el.btnNewNoteSidebar.addEventListener('click', () => newNote());
+  el.btnLibNewNote.addEventListener('click', () => newNote());
+  el.btnLibRefresh.addEventListener('click', () => refreshWorkspace(false));
+  el.btnOpenFolderSidebar.addEventListener('click', addLibraryDialog);
+  el.welcomeOpenFolder.addEventListener('click', addLibraryDialog);
   el.welcomeOpenFile.addEventListener('click', openFileDialog);
   el.welcomeNewNote.addEventListener('click', () => newNote());
   el.btnClearRecent.addEventListener('click', clearRecentList);
@@ -2366,7 +3283,6 @@ function bindEvents() {
   el.btnReveal.addEventListener('click', revealCurrent);
   el.btnHistory.addEventListener('click', openHistory);
   el.btnToggleSidebar.addEventListener('click', toggleSidebar);
-  el.btnTogglePreview.addEventListener('click', togglePreview);
   el.btnTheme.addEventListener('click', toggleTheme);
   el.btnSettings.addEventListener('click', openSettings);
   el.btnOverwrite.addEventListener('click', overwriteConflict);
@@ -2380,15 +3296,33 @@ function bindEvents() {
     if (tab) closeTab(tab.id, { force: true });
   });
   el.btnFind.addEventListener('click', openFind);
+  el.btnSearchClose.addEventListener('click', clearSearch);
+  el.btnStar.addEventListener('click', () => toggleStar());
+  el.viewSwitch.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-mode]');
+    if (!button || button.disabled) return;
+    updateSettings({ viewMode: button.dataset.mode });
+    if (button.dataset.mode === 'reading') closeFind();
+  });
+  el.libSort.addEventListener('change', async () => {
+    await updateSettings({ librarySort: el.libSort.value });
+    renderLibraryView();
+  });
 
   el.previewPane.addEventListener('scroll', () => {
-    if (!state.settings.preview || !cm) return;
+    if (state.settings.viewMode !== 'split' || !cm) return;
     syncPreviewToEditor();
   });
 
   el.preview.addEventListener('click', async (event) => {
     const anchor = event.target.closest('a');
     if (!anchor) return;
+    const wikiTarget = anchor.getAttribute('data-wiki-target');
+    if (wikiTarget) {
+      event.preventDefault();
+      await openWikiLink(wikiTarget);
+      return;
+    }
     const local = anchor.getAttribute('data-local-href');
     if (local) {
       event.preventDefault();
@@ -2412,6 +3346,9 @@ function bindEvents() {
   el.searchInput.addEventListener('input', () => {
     state.searchToken += 1;
     el.btnClearSearch.hidden = !el.searchInput.value;
+    if (state.view === 'search') {
+      setView(activeTab() ? 'doc' : (state.workspace ? 'library' : 'home'));
+    }
     hideSearchResults();
     renderTree();
   });
@@ -2472,7 +3409,7 @@ function bindEvents() {
   });
 
   el.splitter.addEventListener('pointerdown', (event) => {
-    if (!state.settings.preview) return;
+    if (state.settings.viewMode !== 'split') return;
     event.preventDefault();
     gridDrag = el.split.getBoundingClientRect();
     el.splitter.classList.add('dragging');
@@ -2547,7 +3484,7 @@ function bindEvents() {
         closeFind();
         return;
       }
-      if (!el.searchResults.hidden) clearSearch();
+      if (state.view === 'search') clearSearch();
     }
   });
 
@@ -2557,7 +3494,7 @@ function bindEvents() {
   window.addEventListener('focus', () => {
     if (!state.workspace) return;
     if (Date.now() - state.lastRefresh < 1500) return;
-    refreshWorkspace(true);
+    refreshWorkspace(true, { catalog: state.view === 'library' });
   });
   window.addEventListener('error', (event) => {
     logError(`界面异常：${event.message} @ ${event.filename}:${event.lineno}`);
@@ -2627,7 +3564,7 @@ async function init() {
   bindEvents();
   applySettings(DEFAULT_SETTINGS);
   if (window.CodeMirror) createEditor();
-  showWelcome();
+  setView('home');
   renderTabBar();
   updateStatus();
   window.__flushSave = flushSave;
@@ -2649,19 +3586,30 @@ async function init() {
     const boot = await bridge.bootstrap();
     state.platform = boot.platform || 'win32';
     state.testMode = Boolean(boot.testMode);
-    state.recent = boot.recent || [];
+    state.libraries = Array.isArray(boot.libraries) ? boot.libraries : [];
+    state.recent = Array.isArray(boot.recent) ? boot.recent : [];
+    state.starred = Array.isArray(boot.starred) ? boot.starred : [];
     applySettings(boot.settings || DEFAULT_SETTINGS);
     if (boot.workspace) applyWorkspace(boot.workspace);
-    if (boot.file) openDoc(boot.file, { focus: false });
-    else showWelcome();
+    renderLibraries();
+    renderHome();
     renderRecent();
+    if (boot.file) openDoc(boot.file, { focus: false });
+    else setView(boot.workspace ? 'library' : 'home');
     updateWorkspaceChrome();
     updateStatus();
+    if (boot.workspace) scheduleCatalogRefresh(true);
     if (Array.isArray(boot.recovery) && boot.recovery.length > 0) showRecoveryModal(boot.recovery);
     if (state.testMode) {
       window.__mdTest = {
         getState: () => ({
           workspaceRoot: state.workspace ? state.workspace.root : null,
+          activeLibrary: state.workspace ? state.workspace.root : null,
+          libraries: state.libraries.map((lib) => ({ path: lib.path, name: lib.name, active: Boolean(lib.active), exists: lib.exists })),
+          view: state.view,
+          viewMode: state.settings.viewMode,
+          catalogCount: state.catalog.documents.length,
+          starred: state.starred.map((item) => ({ ...item })),
           settings: { ...state.settings },
           recent: state.recent.map((item) => ({ ...item })),
           activeId: state.activeId,
@@ -2669,6 +3617,7 @@ async function init() {
             id: tab.id,
             name: tab.name,
             path: tab.path,
+            libraryRoot: tab.libraryRoot,
             relPath: tab.relPath,
             dirty: tab.dirty,
             recovered: tab.recovered,
@@ -2684,7 +3633,13 @@ async function init() {
         },
         getCursor: () => (cm ? cm.getCursor() : null),
         openRel,
+        openLibrary: switchLibrary,
         refreshWorkspace,
+        getCatalog: () => refreshCatalog(true),
+        toggleStar: () => toggleStar(),
+        openWiki: (target) => openWikiLink(target),
+        getBacklinks: () => refreshBacklinks(),
+        searchAll: (query) => bridge.search({ query }),
         scrollEditorTo: (top) => {
           if (!cm) return;
           cm.scrollTo(null, top);
@@ -2707,7 +3662,7 @@ async function init() {
   } catch (error) {
     showToast(`启动失败：${error.message}`, 'error');
     logError(`启动失败：${error.stack || error}`);
-    showWelcome();
+    setView('home');
   }
   document.body.dataset.ready = '1';
 }

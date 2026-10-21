@@ -82,4 +82,61 @@ assert.strictEqual(text.countWords('你好 world'), 3);
 assert.strictEqual(text.readingMinutes('你好 world', 1), 3);
 assert.strictEqual(text.displayWidth('苹果'), 4);
 
-console.log('text unit checks passed: find, list, outline, table, words');
+// Frontmatter
+const decorated = '---\ntitle: "标题"\ntags: [知识库, 测试]\n---\n# 正文\n';
+const parsed = text.parseFrontmatter(decorated);
+assert.strictEqual(parsed.hasFrontmatter, true);
+assert.strictEqual(parsed.title, '标题');
+assert.deepStrictEqual(parsed.tags, ['知识库', '测试']);
+assert.strictEqual(parsed.body, '# 正文\n');
+assert.strictEqual(parsed.bodyStart, decorated.indexOf('# 正文'));
+assert.strictEqual(text.stripFrontmatter(decorated), '# 正文\n');
+assert.deepStrictEqual(text.parseFrontmatter('# 普通').tags, []);
+assert.strictEqual(text.parseFrontmatter('# 普通').body, '# 普通');
+assert.strictEqual(text.parseFrontmatter('---\ntags: [a]\n没有闭合').body, '---\ntags: [a]\n没有闭合', '未闭合不裁剪');
+const listTags = text.parseFrontmatter('---\ntags:\n  - 一\n  - 二\n---\n正文');
+assert.deepStrictEqual(listTags.tags, ['一', '二']);
+assert.deepStrictEqual(text.parseFrontmatter('---\ntags: a，b\n---\nx').tags, ['a', 'b']);
+assert.deepStrictEqual(text.parseFrontmatter('---\ntags: "a, b"\n---\nx').tags, ['a', 'b']);
+assert.deepStrictEqual(text.parseFrontmatter('---\ntags: [a, A, #b]\n---\nx').tags, ['a', 'b']);
+assert.strictEqual(text.parseFrontmatter('---\r\ntags: [x]\r\n---\r\nbody').body, 'body');
+assert.strictEqual(text.parseFrontmatter('---\r\ntags: [x]\r\n---\r\nbody').tags[0], 'x');
+assert.strictEqual(text.parseFrontmatter('---\n\n---\n正文').hasFrontmatter, false, '顶部分隔线不应当 frontmatter');
+assert.strictEqual(text.parseFrontmatter('---\ntitle: T\n---\n正文').title, 'T');
+
+// Wiki 链接
+const wikiLinks = text.extractWikiLinks('[[a]] [[b|别名]] [[a]]\n`[[code]]`\n```\n[[fence]]\n```\n');
+assert.deepStrictEqual(wikiLinks, ['a', 'b']);
+assert.deepStrictEqual(text.extractWikiLinks('[[x|]] [[|y]]'), ['x']);
+assert.deepStrictEqual(text.documentTitle('---\ntitle: T\n---\n# H', 'file'), 'T');
+assert.strictEqual(text.documentTitle('# H1\n## H2', 'file'), 'H1');
+assert.strictEqual(text.documentTitle('## H2', 'file'), 'H2');
+assert.strictEqual(text.documentTitle('正文', 'file'), 'file');
+assert.strictEqual(text.stripInline('[[任务|别名]]'), '别名');
+assert.strictEqual(text.stripInline('[[任务]]'), '任务');
+assert.deepStrictEqual(text.extractHeadings('# [[任务|别名]]').map((item) => item.text), ['别名']);
+
+const documents = [
+  { relPath: 'dir/任务.md', name: '任务.md', title: '今日任务', links: [] },
+  { relPath: '笔记.md', name: '笔记.md', title: '笔记', links: ['任务'] },
+  { relPath: 'a/笔记.md', name: '笔记.md', title: '另一篇', links: [] }
+];
+assert.strictEqual(text.resolveWikilink('任务', documents).relPath, 'dir/任务.md');
+assert.strictEqual(text.resolveWikilink('任务.md', documents).relPath, 'dir/任务.md');
+assert.strictEqual(text.resolveWikilink('今日任务', documents).relPath, 'dir/任务.md');
+assert.strictEqual(text.resolveWikilink('dir/任务', documents).relPath, 'dir/任务.md');
+assert.strictEqual(text.resolveWikilink('笔记', documents).relPath, '笔记.md');
+assert.strictEqual(text.resolveWikilink('missing', documents), null);
+const ambiguous = [
+  { relPath: 'b/同.md', name: '同.md', title: 'B', links: [] },
+  { relPath: 'a/同.md', name: '同.md', title: 'A', links: [] }
+];
+assert.strictEqual(text.resolveWikilink('同', ambiguous).relPath, 'a/同.md');
+assert.strictEqual(text.linkMatchesDoc('任务', documents[0]), true);
+assert.strictEqual(text.linkMatchesDoc('任务', documents[1]), false);
+assert.deepStrictEqual(text.findBacklinks(documents, 'dir/任务.md'), [{ relPath: '笔记.md', title: '笔记' }]);
+assert.deepStrictEqual(text.findBacklinks(documents, '笔记.md'), []);
+const fencedBacklink = { relPath: 'f.md', name: 'f.md', title: 'F', links: text.extractWikiLinks('```\n[[任务]]\n```') };
+assert.deepStrictEqual(text.findBacklinks([documents[0], fencedBacklink], 'dir/任务.md'), []);
+
+console.log('text unit checks passed: find, list, outline, table, words, frontmatter, wikilinks');

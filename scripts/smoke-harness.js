@@ -9,12 +9,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function prepare() {
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'markdown-notes-smoke-'));
+  const secondRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'markdown-notes-smoke-lib2-'));
   const note = [
+    '---',
+    'title: 标题',
+    'tags: [知识库, 测试]',
+    '---',
     '# 标题',
     '',
     '## 子标题',
     '',
     '第一段 **粗体** 和 [外部链接](https://example.com)。',
+    '',
+    '双链：[[任务]] 与 [[任务|别名]]',
     '',
     '![远程图片](https://example.com/pixel.png)',
     '',
@@ -34,14 +41,15 @@ async function prepare() {
   await fsp.mkdir(path.join(root, '忽略目录'));
   await fsp.writeFile(path.join(root, '笔记.md'), note, 'utf8');
   await fsp.writeFile(path.join(root, '其他.md'), '# 其他\n\n无关内容。\n', 'utf8');
-  await fsp.writeFile(path.join(root, '子目录', '任务.md'), '# 任务\n\n这里是苹果搜索关键字。\n', 'utf8');
+  await fsp.writeFile(path.join(root, '子目录', '任务.md'), '# 任务\n\n这里是苹果搜索关键字。\n\n引用：[[笔记]]\n', 'utf8');
   await fsp.writeFile(path.join(root, '忽略目录', '隐藏.md'), '# 隐藏\n\n不应出现在目录树。\n', 'utf8');
   await fsp.writeFile(path.join(root, '消失.md'), '# 消失\n\n稍后从磁盘删除。\n', 'utf8');
-  return root;
+  await fsp.writeFile(path.join(secondRoot, '外部.md'), '---\ntags: [第二库]\n---\n# 外部\n\n苹果也出现在另一个知识库。\n', 'utf8');
+  return { root, secondRoot };
 }
 
 async function run(context) {
-  const { win, app, testRoot, log } = context;
+  const { win, app, testRoot, secondRoot, log } = context;
   const results = [];
   let pageError = null;
 
@@ -199,6 +207,7 @@ async function run(context) {
     });
 
     await step('插入表格', async () => {
+      await js('(() => { const text = window.__mdTest.getText(); window.__mdTest.setSelection(text.length, text.length); return true; })()');
       await js('document.querySelector(".tool-btn[data-format=\\"table\\"]").click()');
       await waitFor('window.__mdTest.getText().includes("| ---- | ---- | ---- |")', '插入表格');
       await waitForDisk(path.join(testRoot, '笔记.md'), '| ---- | ---- | ---- |');
@@ -377,14 +386,20 @@ async function run(context) {
       await waitFor('document.documentElement.dataset.theme === "dark"', '深色主题');
       await js('document.getElementById("btnTheme").click()');
       await waitFor('document.documentElement.dataset.theme === "light"', '浅色主题');
-      await js('document.getElementById("btnTogglePreview").click()');
-      assert(await js('document.getElementById("editorWrap").classList.contains("preview-hidden")'), '预览未隐藏');
-      await js('document.getElementById("btnTogglePreview").click()');
-      assert(await js('!document.getElementById("editorWrap").classList.contains("preview-hidden")'), '预览未恢复');
+      await js('document.querySelector("#viewSwitch [data-mode=\\"reading\\"]").click()');
+      await waitFor('document.getElementById("editorWrap").classList.contains("mode-reading")', '阅读模式');
+      assert(await js('document.querySelector(".editor-pane").offsetParent === null'), '阅读模式仍显示编辑区');
+      await js('document.querySelector("#viewSwitch [data-mode=\\"split\\"]").click()');
+      await waitFor('!document.getElementById("editorWrap").classList.contains("mode-reading")', '分栏恢复');
       await js('document.getElementById("btnToggleSidebar").click()');
       assert(await js('document.getElementById("app").classList.contains("sidebar-hidden")'), '侧边栏未隐藏');
       await js('document.getElementById("btnToggleSidebar").click()');
       assert(await js('!document.getElementById("app").classList.contains("sidebar-hidden")'), '侧边栏未恢复');
+    });
+
+    await step('关闭恢复草稿', async () => {
+      await js('document.querySelector(".tab.recovered .tab-close").click()');
+      await waitFor('!window.__mdTest.getState().tabs.some((tab) => tab.recovered)', '恢复草稿标签关闭');
     });
 
     await step('删除文件并清空标签', async () => {
@@ -403,6 +418,96 @@ async function run(context) {
       await waitFor('!document.querySelector(".tree-row.file[data-rel=\\"子目录/重命名笔记.md\\"]")', '目录项移除');
       await waitFor('!window.__mdTest.getState().tabs.some((tab) => tab.relPath === "子目录/重命名笔记.md")', '标签移除');
       assert(!fs.existsSync(path.join(testRoot, '子目录', '重命名笔记.md')), '删除后文件仍然存在');
+    });
+
+    await step('工作台与知识库卡片', async () => {
+      await js('document.getElementById("btnHome").click()');
+      await waitFor('window.__mdTest.getState().view === "home"', '工作台视图');
+      await waitFor('document.querySelectorAll("#libraryCards .lib-card").length === 3', '工作台卡片');
+      const libCount = await js('window.__mdTest.getState().libraries.length');
+      assert(libCount === 2, `知识库数量异常：${libCount}`);
+      const rowCount = await js('document.querySelectorAll("#libraryList .library-row").length');
+      assert(rowCount === 2, `侧栏知识库数量异常：${rowCount}`);
+      await js('Array.from(document.querySelectorAll("#libraryCards .lib-card")).find((card) => card.textContent.includes("第二库")).click()');
+      await waitFor('window.__mdTest.getState().view === "library"', '切换知识库视图');
+      await waitFor('document.getElementById("libTitle").textContent === "第二库"', '第二库标题');
+      await waitFor('document.getElementById("docList").textContent.includes("外部")', '第二库文档列表', 8000);
+    });
+
+    await step('文档目录与标签', async () => {
+      await js('Array.from(document.querySelectorAll("#libraryList .library-row")).find((row) => row.textContent.includes("测试库")).click()');
+      await waitFor(`window.__mdTest.getState().activeLibrary === ${quote(testRoot)}`, '切回测试库');
+      await waitFor('window.__mdTest.getState().catalogCount >= 3', '文档索引', 10000);
+      await waitFor('document.getElementById("docList").textContent.includes("标题")', '文档列表标题');
+      const hasTag = await js('Array.from(document.querySelectorAll("#tagFilter .tag-chip")).some((chip) => chip.textContent.includes("知识库"))');
+      assert(hasTag, '标签筛选缺少「知识库」');
+      await js('Array.from(document.querySelectorAll("#tagFilter .tag-chip")).find((chip) => chip.textContent.includes("知识库")).click()');
+      await waitFor('document.querySelectorAll("#docList .doc-row").length === 1', '标签筛选结果');
+      assert(await js('document.getElementById("docList").textContent.includes("标题")'), '标签筛选结果不含标题文档');
+      await js('Array.from(document.querySelectorAll("#tagFilter .tag-chip")).find((chip) => chip.textContent.trim() === "全部").click()');
+      await waitFor('document.querySelectorAll("#docList .doc-row").length >= 3', '清除标签筛选');
+    });
+
+    await step('收藏', async () => {
+      await js('window.__mdTest.openRel("笔记.md")');
+      await waitFor('window.__mdTest.getText().includes("# 标题")', '打开待收藏文档');
+      await js('document.getElementById("btnStar").click()');
+      await waitFor('document.getElementById("btnStar").textContent === "★"', '收藏状态');
+      await js('document.getElementById("btnHome").click()');
+      await waitFor('document.getElementById("starredList").textContent.includes("笔记")', '收藏列表');
+      await js('document.querySelector("#starredList .star-toggle").click()');
+      await waitFor('document.getElementById("starredWrap").hidden === true', '取消收藏');
+    });
+
+    await step('双链与反向链接', async () => {
+      await js('Array.from(document.querySelectorAll("#libraryCards .lib-card")).find((card) => card.textContent.includes("测试库")).click()');
+      await waitFor('window.__mdTest.getState().view === "library"', '回到测试库');
+      await js('window.__mdTest.openRel("笔记.md")');
+      await waitFor('document.querySelector(\'a.wiki-link[data-wiki-target="任务"]\')', '双链渲染');
+      await js('document.querySelector(\'a.wiki-link[data-wiki-target="任务"]\').click()');
+      await waitFor('window.__mdTest.getState().tabs.find((tab) => tab.relPath === "子目录/任务.md" && tab.id === window.__mdTest.getState().activeId)', '打开双链目标');
+      assert(await js(`window.__mdTest.getState().tabs.find((tab) => tab.relPath === "子目录/任务.md").libraryRoot === ${quote(testRoot)}`), '双链目标库异常');
+      await waitFor('document.getElementById("backlinkList").textContent.includes("笔记")', '反向链接列表');
+    });
+
+    await step('跨库搜索', async () => {
+      await js(`(() => {
+        const input = document.getElementById('searchInput');
+        input.value = '苹果';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        return true;
+      })()`);
+      await waitFor('document.querySelectorAll(".search-group").length === 2', '跨库搜索结果', 10000);
+      const text = await js('document.getElementById("searchResults").textContent');
+      assert(text.includes('测试库') && text.includes('第二库'), '搜索结果缺少知识库分组');
+      await js(`(() => {
+        const group = Array.from(document.querySelectorAll('.search-group')).find((item) => item.textContent.includes('第二库'));
+        group.querySelector('.search-result').click();
+        return true;
+      })()`);
+      await waitFor(`window.__mdTest.getState().tabs.find((tab) => tab.id === window.__mdTest.getState().activeId && tab.libraryRoot && tab.libraryRoot.toLowerCase() === ${quote(secondRoot.toLowerCase())})`, '打开第二库命中');
+      await waitFor('window.__mdTest.getText().includes("苹果")', '第二库命中内容');
+      await js('Array.from(document.querySelectorAll("#libraryList .library-row")).find((row) => row.textContent.includes("测试库")).click()');
+      await waitFor(`window.__mdTest.getState().activeLibrary === ${quote(testRoot)}`, '搜索后切回测试库');
+    });
+
+    await step('移除知识库', async () => {
+      await js(`(() => {
+        const row = Array.from(document.querySelectorAll('#libraryList .library-row')).find((item) => item.textContent.includes('第二库'));
+        row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 120, clientY: 180 }));
+        return true;
+      })()`);
+      await waitFor('document.getElementById("contextMenu").hidden === false', '知识库右键菜单');
+      await js(`(() => {
+        const item = Array.from(document.querySelectorAll('#contextMenu button')).find((button) => button.textContent === '从列表移除…');
+        item.click();
+        return true;
+      })()`);
+      await waitFor('window.__mdTest.getState().libraries.length === 1', '移除知识库', 10000);
+      await waitFor('!document.getElementById("libraryCards").textContent.includes("第二库")', '首页卡片移除');
+      assert(fs.existsSync(secondRoot), '移除知识库时删除了磁盘文件');
+      await waitFor(`window.__mdTest.getState().activeLibrary === ${quote(testRoot)}`, '移除后回到测试库');
     });
 
     await step('截图留证', async () => {
@@ -437,6 +542,7 @@ async function run(context) {
   console.log(`\n冒烟测试：${results.length - failed.length}/${results.length} 通过`);
   if (pageError) console.log(`页面最近错误：${pageError}`);
   await fsp.rm(testRoot, { recursive: true, force: true }).catch(() => {});
+  await fsp.rm(secondRoot, { recursive: true, force: true }).catch(() => {});
   log('info', 'smoke', `${results.length - failed.length}/${results.length} passed`);
   app.exit(failed.length === 0 ? 0 : 1);
 }

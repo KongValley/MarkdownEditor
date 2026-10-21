@@ -284,6 +284,7 @@ async function searchWorkspace(root, rawQuery, options = {}) {
   if (!query) return { results: [], truncated: false, filesScanned: 0 };
   const matchers = compileIgnore(options.ignore);
   if (query.length > 100) throw new Error('搜索内容过长');
+  const maxResults = Math.max(1, Math.min(500, Number(options.limit) || MAX_SEARCH_RESULTS));
   const needle = query.toLowerCase();
   const results = [];
   let filesScanned = 0;
@@ -333,7 +334,7 @@ async function searchWorkspace(root, rawQuery, options = {}) {
       let perFile = 0;
       for (let index = 0; index < lines.length; index += 1) {
         if (!lines[index].toLowerCase().includes(needle)) continue;
-        if (results.length >= MAX_SEARCH_RESULTS) {
+        if (results.length >= maxResults) {
           truncated = true;
           return;
         }

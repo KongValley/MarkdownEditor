@@ -20,6 +20,7 @@ function normalizeEntry(raw) {
     path: absPath,
     name: typeof raw.name === 'string' && raw.name ? raw.name : (absPath ? path.basename(absPath) : '未命名'),
     relPath: typeof raw.relPath === 'string' ? raw.relPath : null,
+    library: typeof raw.library === 'string' && path.isAbsolute(raw.library) ? path.resolve(raw.library) : null,
     content,
     eol: raw.eol === 'crlf' ? 'crlf' : 'lf',
     encoding: raw.encoding === 'utf16le' || raw.encoding === 'utf8bom' ? raw.encoding : 'utf8',
