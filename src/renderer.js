@@ -182,6 +182,9 @@ let catalogTimer = null;
 let backlinkTimer = null;
 let saveQueue = Promise.resolve();
 let modalResolve = null;
+let modalReturnFocus = null;
+let settingsReturnFocus = null;
+let historyReturnFocus = null;
 let gridDrag = null;
 let suppressChange = false;
 
@@ -852,7 +855,9 @@ function renderLibraryCards() {
     path.textContent = lib.exists === false ? '路径不可用' : lib.path;
     const meta = document.createElement('span');
     meta.className = 'lib-card-meta';
-    meta.textContent = lib.docCount ? `${lib.docCount} 篇文档` : '尚未打开';
+    meta.textContent = lib.exists === false
+      ? '路径不可用'
+      : (lib.lastOpenedAt ? `${lib.docCount || 0} 篇文档` : '尚未打开');
     card.append(icon, name, path, meta);
     card.addEventListener('click', () => switchLibrary(lib.path));
     card.addEventListener('contextmenu', (event) => {
@@ -921,6 +926,11 @@ async function addLibraryDialog() {
 }
 
 async function switchLibrary(libraryPath) {
+  const known = state.libraries.find((lib) => samePath(lib.path, libraryPath));
+  if (known && known.exists === false) {
+    showToast(`「${known.name || baseName(libraryPath)}」路径不可用，请从列表移除后重新添加`, 'warn', 6000);
+    return;
+  }
   const token = ++state.contextToken;
   try {
     const result = await bridge.openLibrary(libraryPath);
@@ -1007,8 +1017,9 @@ async function removeLibrary(lib) {
         else showWelcome();
       }
     }
-    if (!activeTab() && state.view === 'doc') showWelcome();
+    if (!activeTab() && (!state.workspace || state.view === 'doc')) showWelcome();
     else if (activeTab()) afterTabActivated(activeTab());
+    syncButtons();
     await refreshHome();
     showToast('已从列表移除知识库，磁盘文件未删除', 'success');
   } catch (error) {
@@ -1223,6 +1234,8 @@ function renderTabBar() {
     button.className = `tab${tab.id === state.activeId ? ' active' : ''}${tab.recovered ? ' recovered' : ''}`;
     button.dataset.id = String(tab.id);
     button.setAttribute('role', 'tab');
+    button.setAttribute('aria-selected', String(tab.id === state.activeId));
+    button.tabIndex = tab.id === state.activeId ? 0 : -1;
     button.title = tab.path || tab.name;
     const name = document.createElement('span');
     name.className = 'tab-name';
@@ -1238,6 +1251,8 @@ function renderTabBar() {
     close.className = 'tab-close';
     close.textContent = '×';
     close.title = '关闭标签页';
+    close.tabIndex = -1;
+    close.setAttribute('aria-label', `关闭 ${tab.name}`);
     close.addEventListener('click', (event) => {
       event.stopPropagation();
       closeTab(tab.id);
@@ -1297,6 +1312,7 @@ function activateTab(id, options = {}) {
       showEditor();
       ensureLibraryContext(current.libraryRoot);
     }
+    syncButtons();
     if (options.line) jumpToLine(options.line);
     return;
   }
@@ -1318,6 +1334,7 @@ function activateTab(id, options = {}) {
   renderTree();
   showEditor();
   afterTabActivated(tab, options);
+  syncButtons();
   if (!options.line && options.focus !== false && cm) cm.focus();
 }
 
@@ -1373,6 +1390,7 @@ function openDoc(doc, options = {}) {
   renderTree();
   showEditor();
   afterTabActivated(tab, options);
+  syncButtons();
   if (!options.line && options.focus !== false && cm) cm.focus();
   return tab;
 }
@@ -1415,6 +1433,7 @@ function closeTab(id, options = {}) {
       renderTabBar();
     }
     renderTree();
+    syncButtons();
     return true;
   };
   if (!(tab.dirty || tab.recovered || tab.conflict || tab.missing)) return Promise.resolve(finish());
@@ -1595,6 +1614,7 @@ function showRecoveryModal(entries) {
     el.recoveryList.append(item);
   }
   el.recoveryModal.hidden = entries.length === 0;
+  if (entries.length > 0) $('recoveryRestore').focus();
 }
 
 async function restoreRecovery() {
@@ -1629,7 +1649,10 @@ async function restoreRecovery() {
     activateTab(target.id, { focus: false });
   }
   renderTabBar();
+  syncButtons();
   showToast(`已恢复 ${entries.length} 个草稿，请检查后保存`, 'warn', 6000);
+  if (activeTab() && cm) cm.focus();
+  else el.welcomeOpenFolder.focus();
 }
 
 async function discardRecovery() {
@@ -1640,6 +1663,8 @@ async function discardRecovery() {
   } catch {
     // 忽略。
   }
+  if (activeTab() && cm) cm.focus();
+  else el.welcomeOpenFolder.focus();
 }
 
 /* ---------- 编辑器事件 ---------- */
@@ -2430,7 +2455,14 @@ function renderSearchResults(data, query) {
   if (data.results.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'search-empty';
-    empty.textContent = '没有找到匹配内容';
+    const message = document.createElement('div');
+    message.textContent = '没有找到匹配内容';
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.className = 'btn small';
+    action.textContent = '清除搜索';
+    action.addEventListener('click', clearSearch);
+    empty.append(message, action);
     el.searchResults.append(empty);
     return;
   }
@@ -2551,6 +2583,7 @@ function promptName(options) {
     modalResolve = null;
     previous(null);
   }
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   return new Promise((resolve) => {
     modalResolve = resolve;
     el.modalTitle.textContent = options.title || '输入';
@@ -2568,10 +2601,13 @@ function promptName(options) {
 }
 
 function closeModal(value) {
+  const restore = value == null ? modalReturnFocus : null;
+  modalReturnFocus = null;
   el.modal.hidden = true;
   const resolve = modalResolve;
   modalResolve = null;
   if (resolve) resolve(value);
+  if (restore && restore.isConnected) restore.focus();
 }
 
 function showToast(message, type = 'info', duration = 4200) {
@@ -2773,7 +2809,7 @@ async function deleteNode(node) {
     state.tabs = state.tabs.filter((tab) => !affected.includes(tab));
     if (!state.tabs.some((tab) => tab.id === state.activeId)) {
       const next = state.tabs[0] || null;
-      state.activeId = null;
+      state.activeId = next ? next.id : null;
       if (next) {
         loadTabIntoEditor(next);
         renderTabBar();
@@ -2789,6 +2825,7 @@ async function deleteNode(node) {
     }
     applyWorkspace(result.workspace);
     if (!activeTab()) showWelcome();
+    syncButtons();
     renderTabBar();
     updateTitle();
     updateStatus();
@@ -2933,6 +2970,7 @@ async function saveAs() {
     renderTabBar();
     renderDocRail();
     renderStarButton();
+    syncButtons();
     refreshBacklinks();
     if (result.library && state.workspace && samePath(result.library, state.workspace.root)) {
       if (result.relPath) {
@@ -2954,8 +2992,17 @@ async function saveAs() {
 async function openHistory() {
   const tab = activeTab();
   if (!tab || !tab.path) return;
+  historyReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   await loadHistory(tab);
   el.historyModal.hidden = false;
+  $('historyClose').focus();
+}
+
+function closeHistory() {
+  el.historyModal.hidden = true;
+  const target = historyReturnFocus;
+  historyReturnFocus = null;
+  if (target && target.isConnected) target.focus();
 }
 
 async function loadHistory(tab) {
@@ -3034,7 +3081,7 @@ async function loadBackupIntoEditor(tab, id) {
     tab.encoding = backup.encoding;
     tab.dirty = true;
     if (tab.id === state.activeId) loadTabIntoEditor(tab);
-    el.historyModal.hidden = true;
+    closeHistory();
     renderTabBar();
     updateTitle();
     updateStatus();
@@ -3142,6 +3189,7 @@ async function updateSettings(patch) {
 }
 
 function openSettings() {
+  settingsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   el.settingsModal.hidden = false;
   const settings = state.settings;
   $('setTheme').value = settings.theme;
@@ -3156,6 +3204,14 @@ function openSettings() {
   $('setSyntaxHighlight').checked = settings.syntaxHighlight;
   $('setReadingTime').checked = settings.showReadingTime;
   $('setIgnoreDirs').value = (settings.ignoreDirs || []).join(', ');
+  $('setTheme').focus();
+}
+
+function closeSettings() {
+  el.settingsModal.hidden = true;
+  const target = settingsReturnFocus;
+  settingsReturnFocus = null;
+  if (target && target.isConnected) target.focus();
 }
 
 async function saveSettingsForm() {
@@ -3176,7 +3232,7 @@ async function saveSettingsForm() {
     ignoreDirs
   });
   if (next) {
-    el.settingsModal.hidden = true;
+    closeSettings();
     if ((next.ignoreDirs || []).join('\u0000') !== previousIgnore) await refreshWorkspace(true);
     showToast('设置已保存', 'success');
   }
@@ -3312,6 +3368,29 @@ function bindEvents() {
   el.previewPane.addEventListener('scroll', () => {
     if (state.settings.viewMode !== 'split' || !cm) return;
     syncPreviewToEditor();
+  });
+
+  el.tabbar.addEventListener('keydown', (event) => {
+    const tab = event.target.closest('.tab');
+    if (!tab) return;
+    const index = state.tabs.findIndex((item) => String(item.id) === tab.dataset.id);
+    if (index < 0) return;
+    let nextIndex = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % state.tabs.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + state.tabs.length) % state.tabs.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = state.tabs.length - 1;
+    else if (event.key === 'Delete') {
+      event.preventDefault();
+      closeTab(state.tabs[index].id);
+      return;
+    }
+    if (nextIndex == null) return;
+    event.preventDefault();
+    const next = state.tabs[nextIndex];
+    activateTab(next.id, { focus: false });
+    const nextTab = el.tabbar.querySelector(`.tab[data-id="${next.id}"]`);
+    if (nextTab) nextTab.focus();
   });
 
   el.preview.addEventListener('click', async (event) => {
@@ -3450,11 +3529,11 @@ function bindEvents() {
     event.preventDefault();
     saveSettingsForm();
   });
-  $('settingsCancel').addEventListener('click', () => { el.settingsModal.hidden = true; });
+  $('settingsCancel').addEventListener('click', closeSettings);
   $('settingsLogs').addEventListener('click', () => bridge.openLogs().catch(() => {}));
   $('settingsCopyLog').addEventListener('click', () => bridge.copyLogPath().then(() => showToast('日志路径已复制', 'success')).catch(() => {}));
   $('settingsClearLog').addEventListener('click', () => bridge.clearLogs().then((ok) => { if (ok) showToast('日志已清空', 'success'); }).catch(() => {}));
-  $('historyClose').addEventListener('click', () => { el.historyModal.hidden = true; });
+  $('historyClose').addEventListener('click', closeHistory);
   $('historyCreate').addEventListener('click', createBackupNow);
   $('recoveryRestore').addEventListener('click', restoreRecovery);
   $('recoveryDiscard').addEventListener('click', discardRecovery);
@@ -3473,11 +3552,11 @@ function bindEvents() {
         return;
       }
       if (!el.historyModal.hidden) {
-        el.historyModal.hidden = true;
+        closeHistory();
         return;
       }
       if (!el.settingsModal.hidden) {
-        el.settingsModal.hidden = true;
+        closeSettings();
         return;
       }
       if (state.find.open) {
@@ -3634,6 +3713,7 @@ async function init() {
         getCursor: () => (cm ? cm.getCursor() : null),
         openRel,
         openLibrary: switchLibrary,
+        updateSettings: (patch) => updateSettings(patch),
         refreshWorkspace,
         getCatalog: () => refreshCatalog(true),
         toggleStar: () => toggleStar(),

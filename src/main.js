@@ -14,6 +14,12 @@ const APP_TITLE = 'Markdown 笔记';
 const TEST = process.argv.includes('--smoke-test');
 const SMOKE_BOOT = process.argv.includes('--smoke-boot');
 const PORTABLE_FLAG = process.argv.includes('--portable');
+const TEST_CONTROLS = {
+  confirmResponse: 1,
+  addLibraryPath: null,
+  saveAsPath: null,
+  printPath: null
+};
 const IS_WIN7 = process.platform === 'win32' && os.release().startsWith('6.1');
 let portableMode = false;
 
@@ -51,6 +57,7 @@ let recoveryFile = '';
 let recoveryStore = null;
 let testRoot = null;
 let secondRoot = null;
+let thirdRoot = null;
 let allowClose = false;
 let closeInFlight = false;
 let boundsTimer = null;
@@ -570,6 +577,7 @@ async function initializeState() {
     const prepared = await harness.prepare();
     testRoot = prepared.root;
     secondRoot = prepared.secondRoot;
+    thirdRoot = prepared.thirdRoot;
     state.workspaceRoot = testRoot;
     settings = defaultSettings();
     settings.libraries = [
@@ -738,26 +746,26 @@ function openExternalSafe(url) {
   }
 }
 
+let shortcutEntries = [];
+
+function collectShortcuts(items, out) {
+  for (const item of items || []) {
+    if (!item) continue;
+    if (item.submenu) collectShortcuts(item.submenu, out);
+    else if (!item.role && item.accelerator && item.label) {
+      out.push({ accelerator: item.accelerator, label: item.label });
+    }
+  }
+}
+
 function showShortcuts() {
   dialog.showMessageBox(win, {
     type: 'info',
     title: '快捷键',
     message: 'Markdown 笔记快捷键',
-    detail: [
-      'Ctrl+N        新建笔记',
-      'Ctrl+O        打开文件',
-      'Ctrl+Shift+O  打开文件夹',
-      'Ctrl+S        保存',
-      'Ctrl+Shift+S  另存为',
-      'Ctrl+B        粗体',
-      'Ctrl+I        斜体',
-      'Ctrl+K        插入链接',
-      'Ctrl+E        切换阅读视图',
-      'Ctrl+Shift+B  切换侧边栏',
-      'Ctrl+Shift+F  搜索全部知识库',
-      'Ctrl+Shift+O  添加知识库',
-      'Ctrl+P        打印'
-    ].join('\n')
+    detail: shortcutEntries
+      .map(({ accelerator, label }) => `${accelerator.padEnd(14)}${label.replace(/…$/, '')}`)
+      .join('\n')
   });
 }
 
@@ -845,6 +853,8 @@ function createMenu() {
   if (!app.isPackaged) {
     template[2].submenu.push({ type: 'separator' }, { role: 'toggleDevTools', label: '开发者工具' });
   }
+  shortcutEntries = [];
+  collectShortcuts(template, shortcutEntries);
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
@@ -1059,6 +1069,7 @@ async function removeLibrary(libPath) {
   if (!lib) throw new Error('知识库不存在');
   const abs = lib.path;
   if (settings.lastFile && files.isInside(abs, settings.lastFile)) settings.lastFile = null;
+  settings.recent = settings.recent.filter((item) => !files.isInside(abs, item.path));
   settings.libraries = settings.libraries.filter((item) => !samePath(item.path, abs));
   settings.starred = settings.starred.filter((star) => !samePath(star.library, abs));
   catalog.clear(abs);
@@ -1180,12 +1191,19 @@ function registerIpc() {
   });
 
   handle('library:add', async () => {
-    const result = await dialog.showOpenDialog(win, {
-      title: '添加知识库',
-      properties: ['openDirectory', 'createDirectory']
-    });
-    if (result.canceled || result.filePaths.length === 0) return null;
-    const opened = await addOrOpenLibrary(result.filePaths[0]);
+    let picked = null;
+    if (TEST && TEST_CONTROLS.addLibraryPath) {
+      picked = TEST_CONTROLS.addLibraryPath;
+      TEST_CONTROLS.addLibraryPath = null;
+    } else {
+      const result = await dialog.showOpenDialog(win, {
+        title: '添加知识库',
+        properties: ['openDirectory', 'createDirectory']
+      });
+      if (result.canceled || result.filePaths.length === 0) return null;
+      picked = result.filePaths[0];
+    }
+    const opened = await addOrOpenLibrary(picked);
     return { libraries: opened.libraries, workspace: opened.workspace };
   });
 
@@ -1315,16 +1333,21 @@ function registerIpc() {
     const suggested = payload.suggestedName || '未命名.md';
     const defaultDir = current ? path.dirname(current) : (state.workspaceRoot || app.getPath('documents'));
     let target = path.join(defaultDir, suggested);
-    const result = await dialog.showSaveDialog(win, {
-      title: '另存为',
-      defaultPath: target,
-      filters: [
-        { name: 'Markdown', extensions: ['md'] },
-        { name: '文本', extensions: ['txt'] }
-      ]
-    });
-    if (result.canceled || !result.filePath) return null;
-    target = result.filePath;
+    if (TEST && TEST_CONTROLS.saveAsPath) {
+      target = path.resolve(TEST_CONTROLS.saveAsPath);
+      TEST_CONTROLS.saveAsPath = null;
+    } else {
+      const result = await dialog.showSaveDialog(win, {
+        title: '另存为',
+        defaultPath: target,
+        filters: [
+          { name: 'Markdown', extensions: ['md'] },
+          { name: '文本', extensions: ['txt'] }
+        ]
+      });
+      if (result.canceled || !result.filePath) return null;
+      target = result.filePath;
+    }
     if (!path.extname(target)) target += '.md';
     if (!files.isMarkdownPath(target)) target += '.md';
     try {
@@ -1577,7 +1600,7 @@ function registerIpc() {
   });
 
   handle('ui:confirm', async (payload) => {
-    if (TEST) return { response: 1 };
+    if (TEST) return { response: Number.isInteger(TEST_CONTROLS.confirmResponse) ? TEST_CONTROLS.confirmResponse : 1 };
     const options = payload && typeof payload === 'object' ? payload : {};
     const result = await dialog.showMessageBox(win, {
       type: options.type || 'question',
@@ -1594,6 +1617,13 @@ function registerIpc() {
 
   handle('ui:print', async () => {
     if (!win || win.isDestroyed()) return false;
+    if (TEST && TEST_CONTROLS.printPath) {
+      const target = TEST_CONTROLS.printPath;
+      TEST_CONTROLS.printPath = null;
+      const pdf = await win.webContents.printToPDF({ printBackground: true });
+      await fsp.writeFile(target, pdf);
+      return { printed: true, path: target, bytes: pdf.length };
+    }
     win.webContents.print({ silent: false, printBackground: true }, (success, reason) => {
       if (!success && reason) log('warn', 'print', reason);
     });
@@ -1665,7 +1695,9 @@ if (!gotLock) {
         settings,
         log,
         testRoot,
-        secondRoot
+        secondRoot,
+        thirdRoot,
+        testControls: TEST_CONTROLS
       });
     } else if (SMOKE_BOOT) {
       runSmokeBoot(window);
